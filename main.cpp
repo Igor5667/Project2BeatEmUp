@@ -8,14 +8,68 @@ extern "C" {
 #include"./SDL2-2.0.10/include/SDL_main.h"
 }
 
-#define SCREEN_WIDTH	640
-#define SCREEN_HEIGHT	480
+//=================================
+//    INICJALIZACJA STA£YCH
+//=================================
 
+#define SCREEN_WIDTH	1280
+#define SCREEN_HEIGHT	720
+#define PLAYER_START_X_POS     45
+#define ETI_SPEED_VAL   1.0
+#define MOVE_SPEED    500.0 // pixele na sekundê
+#define FPS_REFRESH     0.5
+
+//=================================
+//       STRUKTURY
+//=================================
+
+// g³ówna struktura stanu gry
+struct GameState {
+	// Pozycja gracza (ETI)
+	int etiPositionX; // Zmienilem na double dla plynnosci, w main bylo int, ale przy refactoringu warto trzymac pozycje jako double
+	int etiPositionY;
+
+	// Fizyka i czas
+	double etiSpeed;
+	double moveSpeed; // To bylo jako stala lokalna, przenosimy do stanu
+	double distance;
+	double worldTime;
+	double delta;
+	int t1;
+	int t2;
+
+	// Licznik FPS
+	int frames;
+	double fpsTimer;
+	double fps;
+
+	// Flaga wyjœcia
+	int quit;
+
+	// Kolory (zmapowane wartoœci pikseli)
+	int czarny;
+	int zielony;
+	int czerwony;
+	int niebieski;
+};
+
+// struktura obs³uguj¹ca bibliotekê SDL
+struct SDLContext {
+	SDL_Window* window;
+	SDL_Renderer* renderer;
+	SDL_Surface* screen;
+	SDL_Texture* scrtex;
+	SDL_Surface* charset;
+	SDL_Surface* eti;
+};
+
+
+//=================================
+//       FUNCKCJE DRAW
+//=================================
 
 // narysowanie napisu txt na powierzchni screen, zaczynaj¹c od punktu (x, y)
 // charset to bitmapa 128x128 zawieraj¹ca znaki
-// draw a text txt on surface screen, starting from the point (x, y)
-// charset is a 128x128 bitmap containing character images
 void DrawString(SDL_Surface *screen, int x, int y, const char *text,
                 SDL_Surface *charset) {
 	int px, py, c;
@@ -38,11 +92,8 @@ void DrawString(SDL_Surface *screen, int x, int y, const char *text,
 		};
 	};
 
-
 // narysowanie na ekranie screen powierzchni sprite w punkcie (x, y)
 // (x, y) to punkt œrodka obrazka sprite na ekranie
-// draw a surface sprite on a surface screen in point (x, y)
-// (x, y) is the center of sprite on screen
 void DrawSurface(SDL_Surface *screen, SDL_Surface *sprite, int x, int y) {
 	SDL_Rect dest;
 	dest.x = x - sprite->w / 2;
@@ -52,19 +103,15 @@ void DrawSurface(SDL_Surface *screen, SDL_Surface *sprite, int x, int y) {
 	SDL_BlitSurface(sprite, NULL, screen, &dest);
 	};
 
-
 // rysowanie pojedynczego pixela
-// draw a single pixel
 void DrawPixel(SDL_Surface *surface, int x, int y, Uint32 color) {
 	int bpp = surface->format->BytesPerPixel;
 	Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
 	*(Uint32 *)p = color;
 	};
 
-
 // rysowanie linii o d³ugoœci l w pionie (gdy dx = 0, dy = 1) 
 // b¹dŸ poziomie (gdy dx = 1, dy = 0)
-// draw a vertical (when dx = 0, dy = 1) or horizontal (when dx = 1, dy = 0) line
 void DrawLine(SDL_Surface *screen, int x, int y, int l, int dx, int dy, Uint32 color) {
 	for(int i = 0; i < l; i++) {
 		DrawPixel(screen, x, y, color);
@@ -73,9 +120,7 @@ void DrawLine(SDL_Surface *screen, int x, int y, int l, int dx, int dy, Uint32 c
 		};
 	};
 
-
 // rysowanie prostok¹ta o d³ugoœci boków l i k
-// draw a rectangle of size l by k
 void DrawRectangle(SDL_Surface *screen, int x, int y, int l, int k,
                    Uint32 outlineColor, Uint32 fillColor) {
 	int i;
@@ -87,173 +132,212 @@ void DrawRectangle(SDL_Surface *screen, int x, int y, int l, int k,
 		DrawLine(screen, x + 1, i, l - 2, 1, 0, fillColor);
 	};
 
+//=================================
+//       FUNCKCJE LOGIC
+//=================================
 
-// main
-#ifdef __cplusplus
-extern "C"
-#endif
-int main(int argc, char **argv) {
-	int t1, t2, quit, frames, rc;
-	double delta, worldTime, fpsTimer, fps, distance, etiSpeed;
+// obs³ugiwanie prostych zdarzeñ typu escape
+// albo zakoñczenie programu
+void handleEvents(GameState* state) {
 	SDL_Event event;
-	SDL_Surface *screen, *charset;
-	SDL_Surface *eti;
-	SDL_Texture *scrtex;
-	SDL_Window *window;
-	SDL_Renderer *renderer;
+	while (SDL_PollEvent(&event)) {
+		switch (event.type) {
+		case SDL_KEYDOWN:
+			if (event.key.keysym.sym == SDLK_ESCAPE) state->quit = 1;
+			break;
+		case SDL_QUIT:
+			state->quit = 1;
+			break;
+		};
+	};
+}
 
-	// okno konsoli nie jest widoczne, je¿eli chcemy zobaczyæ
-	// komunikaty wypisywane printf-em trzeba w opcjach:
-	// project -> szablon2 properties -> Linker -> System -> Subsystem
-	// zmieniæ na "Console"
-	// console window is not visible, to see the printf output
-	// the option:
-	// project -> szablon2 properties -> Linker -> System -> Subsystem
-	// must be changed to "Console"
-	printf("wyjscie printfa trafia do tego okienka\n");
-	printf("printf output goes here\n");
+// aktualizacja stanu gry
+void updateGame(GameState* state) {
+	// obliczanie czasu globalnego
+	state->t2 = SDL_GetTicks();
+	state->delta = (state->t2 - state->t1) * 0.001;
+	state->t1 = state->t2;
+	state->worldTime += state->delta;
 
-	if(SDL_Init(SDL_INIT_EVERYTHING) != 0) {
+	// dodanie eti sterowany WSAD
+	const Uint8* kaystate = SDL_GetKeyboardState(NULL);
+	if (kaystate[SDL_SCANCODE_W]) state->etiPositionY -= (int)(state->moveSpeed * state->delta);
+	if (kaystate[SDL_SCANCODE_S]) state->etiPositionY += (int)(state->moveSpeed * state->delta);
+	if (kaystate[SDL_SCANCODE_A]) state->etiPositionX -= (int)(state->moveSpeed * state->delta);
+	if (kaystate[SDL_SCANCODE_D]) state->etiPositionX += (int)(state->moveSpeed * state->delta);
+
+	// poruszanie siê
+	state->distance += state->etiSpeed * state->delta;
+
+	// obliczanie FPS
+	state->fpsTimer += state->delta;
+	if (state->fpsTimer > FPS_REFRESH) {
+		state->fps = state->frames * 2;
+		state->frames = 0;
+		state->fpsTimer -= FPS_REFRESH;
+	};
+	state->frames++;
+}
+
+void render(SDLContext* sdl, GameState* state) {
+	char text[128];
+
+	// rysowanie t³a
+	SDL_FillRect(sdl->screen, NULL, state->czarny);
+
+	// rysowanie gracza
+	DrawSurface(sdl->screen, sdl->eti, (int)state->etiPositionX, (int)state->etiPositionY);
+
+	// rysowanie info na górze
+	DrawRectangle(sdl->screen, 4, 4, SCREEN_WIDTH - 8, 36, state->czerwony, state->niebieski);
+	sprintf(text, "Szablon drugiego zadania, czas trwania = %.1lf s  %.0lf klatek / s", state->worldTime, state->fps);
+	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 10, text, sdl->charset);
+	sprintf(text, "Esc - wyjscie, \030 - przyspieszenie, \031 - zwolnienie");
+	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 26, text, sdl->charset);
+
+	// wysy³anie na ekran
+	SDL_UpdateTexture(sdl->scrtex, NULL, sdl->screen->pixels, sdl->screen->pitch);
+	SDL_RenderCopy(sdl->renderer, sdl->scrtex, NULL, NULL);
+	SDL_RenderPresent(sdl->renderer);
+}
+
+//=================================
+//       FUNCKCJE SETUP
+//=================================
+
+// inicjalizacja stanu gry oraz kolorów(dlatego przekazujemy surface ekranu)
+void initGameState(GameState* state, const SDL_Surface* screen) {
+	// Pozycje startowe
+	state->etiPositionX = PLAYER_START_X_POS;
+	state->etiPositionY = SCREEN_HEIGHT / 2 - PLAYER_START_X_POS;
+
+	// Parametry ruchu
+	state->etiSpeed = ETI_SPEED_VAL;
+	state->moveSpeed = MOVE_SPEED; // pixele na sekundê
+	state->distance = 0;
+
+	// Czas
+	state->worldTime = 0;
+	state->t1 = SDL_GetTicks();
+	state->frames = 0;
+	state->fpsTimer = 0;
+	state->fps = 0;
+
+	// Flagi
+	state->quit = 0;
+
+	// Mapowanie kolorów (wymaga formatu ekranu, dlatego przekazujemy screen)
+	state->czarny = SDL_MapRGB(screen->format, 0x00, 0x00, 0x00);
+	state->zielony = SDL_MapRGB(screen->format, 0x00, 0xFF, 0x00);
+	state->czerwony = SDL_MapRGB(screen->format, 0xFF, 0x00, 0x00);
+	state->niebieski = SDL_MapRGB(screen->format, 0x11, 0x11, 0xCC);
+}
+
+// funkcja inicjalizuj¹ca bibliotekê SDL
+bool initSDL(SDLContext *sdl) {
+	if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
 		printf("SDL_Init error: %s\n", SDL_GetError());
 		return 1;
-		}
+	}
 
 	// tryb pe³noekranowy / fullscreen mode
-//	rc = SDL_CreateWindowAndRenderer(0, 0, SDL_WINDOW_FULLSCREEN_DESKTOP,
+//	int rc = SDL_CreateWindowAndRenderer(0, 0, SDL_WINDOW_FULLSCREEN_DESKTOP,
 //	                                 &window, &renderer);
-	rc = SDL_CreateWindowAndRenderer(SCREEN_WIDTH, SCREEN_HEIGHT, 0,
-	                                 &window, &renderer);
-	if(rc != 0) {
+	int rc = SDL_CreateWindowAndRenderer(SCREEN_WIDTH, SCREEN_HEIGHT, 0,
+		&sdl->window, &sdl->renderer);
+	if (rc != 0) {
 		SDL_Quit();
 		printf("SDL_CreateWindowAndRenderer error: %s\n", SDL_GetError());
 		return 1;
-		};
-	
+	};
+
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-	SDL_RenderSetLogicalSize(renderer, SCREEN_WIDTH, SCREEN_HEIGHT);
-	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+	SDL_RenderSetLogicalSize(sdl->renderer, SCREEN_WIDTH, SCREEN_HEIGHT);
+	SDL_SetRenderDrawColor(sdl->renderer, 0, 0, 0, 255);
+	SDL_SetWindowTitle(sdl->window, "Szablon do zdania drugiego 2017");
 
-	SDL_SetWindowTitle(window, "Szablon do zdania drugiego 2017");
+	sdl->screen = SDL_CreateRGBSurface(0, SCREEN_WIDTH, SCREEN_HEIGHT, 32,
+		0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
 
-
-	screen = SDL_CreateRGBSurface(0, SCREEN_WIDTH, SCREEN_HEIGHT, 32,
-	                              0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
-
-	scrtex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
-	                           SDL_TEXTUREACCESS_STREAMING,
-	                           SCREEN_WIDTH, SCREEN_HEIGHT);
+	sdl->scrtex = SDL_CreateTexture(sdl->renderer, SDL_PIXELFORMAT_ARGB8888,
+		SDL_TEXTUREACCESS_STREAMING,
+		SCREEN_WIDTH, SCREEN_HEIGHT);
 
 
 	// wy³¹czenie widocznoœci kursora myszy
 	SDL_ShowCursor(SDL_DISABLE);
+}
 
-	// wczytanie obrazka cs8x8.bmp
-	charset = SDL_LoadBMP("./cs8x8.bmp");
-	if(charset == NULL) {
+// funkcja ³aduj¹ca zasoby (obrazy, czcionki, itp)
+bool loadAssets(SDLContext* sdl) {
+	// wczytanie czcionki cs8x8.bmp
+	sdl->charset = SDL_LoadBMP("./cs8x8.bmp");
+	if (sdl->charset == NULL) {
 		printf("SDL_LoadBMP(cs8x8.bmp) error: %s\n", SDL_GetError());
-		SDL_FreeSurface(screen);
-		SDL_DestroyTexture(scrtex);
-		SDL_DestroyWindow(window);
-		SDL_DestroyRenderer(renderer);
-		SDL_Quit();
 		return 1;
-		};
-	SDL_SetColorKey(charset, true, 0x000000);
-
-	eti = SDL_LoadBMP("./eti.bmp");
-	if(eti == NULL) {
-		printf("SDL_LoadBMP(eti.bmp) error: %s\n", SDL_GetError());
-		SDL_FreeSurface(charset);
-		SDL_FreeSurface(screen);
-		SDL_DestroyTexture(scrtex);
-		SDL_DestroyWindow(window);
-		SDL_DestroyRenderer(renderer);
-		SDL_Quit();
-		return 1;
-		};
-
-	char text[128];
-	int czarny = SDL_MapRGB(screen->format, 0x00, 0x00, 0x00);
-	int zielony = SDL_MapRGB(screen->format, 0x00, 0xFF, 0x00);
-	int czerwony = SDL_MapRGB(screen->format, 0xFF, 0x00, 0x00);
-	int niebieski = SDL_MapRGB(screen->format, 0x11, 0x11, 0xCC);
-
-	t1 = SDL_GetTicks();
-
-	frames = 0;
-	fpsTimer = 0;
-	fps = 0;
-	quit = 0;
-	worldTime = 0;
-	distance = 0;
-	etiSpeed = 1;
-
-	while(!quit) {
-		t2 = SDL_GetTicks();
-
-		// w tym momencie t2-t1 to czas w milisekundach,
-		// jaki uplyna³ od ostatniego narysowania ekranu
-		// delta to ten sam czas w sekundach
-		delta = (t2 - t1) * 0.001;
-		t1 = t2;
-
-		worldTime += delta;
-
-		distance += etiSpeed * delta;
-
-		SDL_FillRect(screen, NULL, czarny);
-
-		DrawSurface(screen, eti,
-		            SCREEN_WIDTH / 2 + sin(distance) * SCREEN_HEIGHT / 3,
-			    SCREEN_HEIGHT / 2 + cos(distance) * SCREEN_HEIGHT / 3);
-
-		fpsTimer += delta;
-		if(fpsTimer > 0.5) {
-			fps = frames * 2;
-			frames = 0;
-			fpsTimer -= 0.5;
-			};
-
-		// tekst informacyjny / info text
-		DrawRectangle(screen, 4, 4, SCREEN_WIDTH - 8, 36, czerwony, niebieski);
-		//            "template for the second project, elapsed time = %.1lf s  %.0lf frames / s"
-		sprintf(text, "Szablon drugiego zadania, czas trwania = %.1lf s  %.0lf klatek / s", worldTime, fps);
-		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, 10, text, charset);
-		//	      "Esc - exit, \030 - faster, \031 - slower"
-		sprintf(text, "Esc - wyjscie, \030 - przyspieszenie, \031 - zwolnienie");
-		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, 26, text, charset);
-
-		SDL_UpdateTexture(scrtex, NULL, screen->pixels, screen->pitch);
-//		SDL_RenderClear(renderer);
-		SDL_RenderCopy(renderer, scrtex, NULL, NULL);
-		SDL_RenderPresent(renderer);
-
-		// obs³uga zdarzeñ (o ile jakieœ zasz³y) / handling of events (if there were any)
-		while(SDL_PollEvent(&event)) {
-			switch(event.type) {
-				case SDL_KEYDOWN:
-					if(event.key.keysym.sym == SDLK_ESCAPE) quit = 1;
-					else if(event.key.keysym.sym == SDLK_UP) etiSpeed = 2.0;
-					else if(event.key.keysym.sym == SDLK_DOWN) etiSpeed = 0.3;
-					break;
-				case SDL_KEYUP:
-					etiSpeed = 1.0;
-					break;
-				case SDL_QUIT:
-					quit = 1;
-					break;
-				};
-			};
-		frames++;
-		};
-
-	// zwolnienie powierzchni / freeing all surfaces
-	SDL_FreeSurface(charset);
-	SDL_FreeSurface(screen);
-	SDL_DestroyTexture(scrtex);
-	SDL_DestroyRenderer(renderer);
-	SDL_DestroyWindow(window);
-
-	SDL_Quit();
-	return 0;
 	};
+	SDL_SetColorKey(sdl->charset, true, 0x000000);
+
+	// wczytanie obrazka (player)
+	sdl->eti = SDL_LoadBMP("./eti.bmp");
+	if (sdl->eti == NULL) {
+		printf("SDL_LoadBMP(eti.bmp) error: %s\n", SDL_GetError());
+		SDL_FreeSurface(sdl->charset);
+		SDL_Quit();
+		return 1;
+	};
+}
+
+// funkcja czyszcz¹ca miejsce po SDL
+void cleanup(SDLContext* sdl) {
+	// Zwalnianie powierzchni (Surface)
+	if (sdl->eti)     SDL_FreeSurface(sdl->eti);
+	if (sdl->charset) SDL_FreeSurface(sdl->charset);
+	if (sdl->screen)  SDL_FreeSurface(sdl->screen);
+
+	// Zwalnianie tekstur, renderera i okna
+	if (sdl->scrtex)   SDL_DestroyTexture(sdl->scrtex);
+	if (sdl->renderer) SDL_DestroyRenderer(sdl->renderer);
+	if (sdl->window)   SDL_DestroyWindow(sdl->window);
+
+	// Wy³¹czenie SDL
+	SDL_Quit();
+}
+
+//=================================
+//         FUNKCJA MAIN
+//=================================
+
+#ifdef __cplusplus
+extern "C"
+#endif
+int main(int argc, char **argv) {
+	GameState state;
+	SDLContext sdl = {};
+
+	// inicjalizacja biblioteki SDL
+	if (!initSDL(&sdl)) {
+		cleanup(&sdl);
+		return 1;
+	}
+
+	// pobieranie zasobów
+	if (!loadAssets(&sdl)) {
+		cleanup(&sdl);
+		return 1;
+	}
+
+	// inicjalizacja stanu gry
+	initGameState(&state, sdl.screen);
+
+	// g³ówna pêtla gry
+	while(!state.quit) {
+		handleEvents(&state);
+		updateGame(&state);
+		render(&sdl, &state);
+	};
+
+	cleanup(&sdl);
+	return 0;
+};
