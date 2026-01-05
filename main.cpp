@@ -12,26 +12,38 @@ extern "C" {
 //    INICJALIZACJA STA£YCH
 //=================================
 
-#define SCREEN_WIDTH	1280
-#define SCREEN_HEIGHT	720
-#define PLAYER_START_X_POS     45
-#define ETI_SPEED_VAL   1.0
-#define MOVE_SPEED    500.0 // pixele na sekundê
-#define FPS_REFRESH     0.5
+#define SCREEN_WIDTH 640
+#define SCREEN_HEIGHT 480
+#define PLAYER_START_X_POS 45
+#define PLAYER_SPEED_VAL 1.0
+#define MOVE_SPEED 500.0 // pixele na sekundê
+#define FPS_REFRESH 0.5
+#define HORIZON_Y SCREEN_HEIGHT*0.25
 
 //=================================
 //       STRUKTURY
 //=================================
 
+struct Player {
+	int x;
+	int y;
+	double speed;
+};
+
+struct Colors {
+	int black;
+	int green;
+	int red;
+	int blue;
+	int sky_color;
+};
+
 // g³ówna struktura stanu gry
 struct GameState {
-	// Pozycja gracza (ETI)
-	int etiPositionX; // Zmienilem na double dla plynnosci, w main bylo int, ale przy refactoringu warto trzymac pozycje jako double
-	int etiPositionY;
+	Player player;
+	Colors colors;
 
-	// Fizyka i czas
-	double etiSpeed;
-	double moveSpeed; // To bylo jako stala lokalna, przenosimy do stanu
+	double moveSpeed;
 	double distance;
 	double worldTime;
 	double delta;
@@ -45,12 +57,6 @@ struct GameState {
 
 	// Flaga wyjœcia
 	int quit;
-
-	// Kolory (zmapowane wartoœci pikseli)
-	int czarny;
-	int zielony;
-	int czerwony;
-	int niebieski;
 };
 
 // struktura obs³uguj¹ca bibliotekê SDL
@@ -60,7 +66,7 @@ struct SDLContext {
 	SDL_Surface* screen;
 	SDL_Texture* scrtex;
 	SDL_Surface* charset;
-	SDL_Surface* eti;
+	SDL_Surface* player;
 };
 
 
@@ -132,6 +138,23 @@ void DrawRectangle(SDL_Surface *screen, int x, int y, int l, int k,
 		DrawLine(screen, x + 1, i, l - 2, 1, 0, fillColor);
 	};
 
+// funkcja rysuj¹ca pod³ogê i t³o o okreœlonyc
+void drawScene(SDL_Surface* screen, int backgroundColor, int floorColor) {
+	SDL_Rect bgRect = { 0, 0, SCREEN_WIDTH, HORIZON_Y };
+	SDL_FillRect(screen, &bgRect, backgroundColor);
+	SDL_Rect floorRect = { 0, HORIZON_Y, SCREEN_WIDTH, SCREEN_HEIGHT - HORIZON_Y };
+	SDL_FillRect(screen, &floorRect, floorColor);
+}
+
+void drawInfo(SDLContext* sdl, GameState* state) {
+	char text[128];
+	DrawRectangle(sdl->screen, 4, 4, SCREEN_WIDTH - 8, 36, state->colors.red, state->colors.blue);
+	sprintf(text, "Szablon drugiego zadania, czas trwania = %.1lf s  %.0lf klatek / s", state->worldTime, state->fps);
+	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 10, text, sdl->charset);
+	sprintf(text, "Esc - wyjscie, \030 - przyspieszenie, \031 - zwolnienie");
+	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 26, text, sdl->charset);
+}
+
 //=================================
 //       FUNCKCJE LOGIC
 //=================================
@@ -160,15 +183,15 @@ void updateGame(GameState* state) {
 	state->t1 = state->t2;
 	state->worldTime += state->delta;
 
-	// dodanie eti sterowany WSAD
+	// dodanie player sterowany
 	const Uint8* kaystate = SDL_GetKeyboardState(NULL);
-	if (kaystate[SDL_SCANCODE_W]) state->etiPositionY -= (int)(state->moveSpeed * state->delta);
-	if (kaystate[SDL_SCANCODE_S]) state->etiPositionY += (int)(state->moveSpeed * state->delta);
-	if (kaystate[SDL_SCANCODE_A]) state->etiPositionX -= (int)(state->moveSpeed * state->delta);
-	if (kaystate[SDL_SCANCODE_D]) state->etiPositionX += (int)(state->moveSpeed * state->delta);
+	if (kaystate[SDL_SCANCODE_W]) state->player.y -= (int)(state->moveSpeed * state->delta);
+	if (kaystate[SDL_SCANCODE_S]) state->player.y += (int)(state->moveSpeed * state->delta);
+	if (kaystate[SDL_SCANCODE_A]) state->player.x -= (int)(state->moveSpeed * state->delta);
+	if (kaystate[SDL_SCANCODE_D]) state->player.x += (int)(state->moveSpeed * state->delta);
 
 	// poruszanie siê
-	state->distance += state->etiSpeed * state->delta;
+	state->distance += state->player.speed * state->delta;
 
 	// obliczanie FPS
 	state->fpsTimer += state->delta;
@@ -181,20 +204,14 @@ void updateGame(GameState* state) {
 }
 
 void render(SDLContext* sdl, GameState* state) {
-	char text[128];
-
-	// rysowanie t³a
-	SDL_FillRect(sdl->screen, NULL, state->czarny);
+	// rysowanie t³a i pod³ogi
+	drawScene(sdl->screen, state->colors.sky_color, state->colors.red);
 
 	// rysowanie gracza
-	DrawSurface(sdl->screen, sdl->eti, (int)state->etiPositionX, (int)state->etiPositionY);
+	DrawSurface(sdl->screen, sdl->player, (int)state->player.x, (int)state->player.y);
 
 	// rysowanie info na górze
-	DrawRectangle(sdl->screen, 4, 4, SCREEN_WIDTH - 8, 36, state->czerwony, state->niebieski);
-	sprintf(text, "Szablon drugiego zadania, czas trwania = %.1lf s  %.0lf klatek / s", state->worldTime, state->fps);
-	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 10, text, sdl->charset);
-	sprintf(text, "Esc - wyjscie, \030 - przyspieszenie, \031 - zwolnienie");
-	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 26, text, sdl->charset);
+	drawInfo(sdl, state);
 
 	// wysy³anie na ekran
 	SDL_UpdateTexture(sdl->scrtex, NULL, sdl->screen->pixels, sdl->screen->pitch);
@@ -209,11 +226,11 @@ void render(SDLContext* sdl, GameState* state) {
 // inicjalizacja stanu gry oraz kolorów(dlatego przekazujemy surface ekranu)
 void initGameState(GameState* state, const SDL_Surface* screen) {
 	// Pozycje startowe
-	state->etiPositionX = PLAYER_START_X_POS;
-	state->etiPositionY = SCREEN_HEIGHT / 2 - PLAYER_START_X_POS;
+	state->player.x = PLAYER_START_X_POS;
+	state->player.y = SCREEN_HEIGHT / 2 - PLAYER_START_X_POS;
 
 	// Parametry ruchu
-	state->etiSpeed = ETI_SPEED_VAL;
+	state->player.speed = PLAYER_SPEED_VAL;
 	state->moveSpeed = MOVE_SPEED; // pixele na sekundê
 	state->distance = 0;
 
@@ -228,10 +245,11 @@ void initGameState(GameState* state, const SDL_Surface* screen) {
 	state->quit = 0;
 
 	// Mapowanie kolorów (wymaga formatu ekranu, dlatego przekazujemy screen)
-	state->czarny = SDL_MapRGB(screen->format, 0x00, 0x00, 0x00);
-	state->zielony = SDL_MapRGB(screen->format, 0x00, 0xFF, 0x00);
-	state->czerwony = SDL_MapRGB(screen->format, 0xFF, 0x00, 0x00);
-	state->niebieski = SDL_MapRGB(screen->format, 0x11, 0x11, 0xCC);
+	state->colors.black = SDL_MapRGB(screen->format, 0x00, 0x00, 0x00);
+	state->colors.green = SDL_MapRGB(screen->format, 0x00, 0xFF, 0x00);
+	state->colors.red = SDL_MapRGB(screen->format, 0xFF, 0x00, 0x00);
+	state->colors.blue = SDL_MapRGB(screen->format, 0x11, 0x11, 0xCC);
+	state->colors.sky_color = SDL_MapRGB(screen->format, 0x5D, 0xED, 0xF7);
 }
 
 // funkcja inicjalizuj¹ca bibliotekê SDL
@@ -280,8 +298,8 @@ bool loadAssets(SDLContext* sdl) {
 	SDL_SetColorKey(sdl->charset, true, 0x000000);
 
 	// wczytanie obrazka (player)
-	sdl->eti = SDL_LoadBMP("./eti.bmp");
-	if (sdl->eti == NULL) {
+	sdl->player = SDL_LoadBMP("./eti.bmp");
+	if (sdl->player == NULL) {
 		printf("SDL_LoadBMP(eti.bmp) error: %s\n", SDL_GetError());
 		SDL_FreeSurface(sdl->charset);
 		SDL_Quit();
@@ -292,7 +310,7 @@ bool loadAssets(SDLContext* sdl) {
 // funkcja czyszcz¹ca miejsce po SDL
 void cleanup(SDLContext* sdl) {
 	// Zwalnianie powierzchni (Surface)
-	if (sdl->eti)     SDL_FreeSurface(sdl->eti);
+	if (sdl->player)     SDL_FreeSurface(sdl->player);
 	if (sdl->charset) SDL_FreeSurface(sdl->charset);
 	if (sdl->screen)  SDL_FreeSurface(sdl->screen);
 
