@@ -15,10 +15,10 @@ extern "C" {
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 480
 #define PLAYER_START_X_POS 45
-#define PLAYER_SPEED_VAL 1.0
-#define MOVE_SPEED 500.0 // pixele na sekundÍ
+#define PLAYER_SPEED 500.0 // pixele na sekundÍ
 #define FPS_REFRESH 0.5
-#define HORIZON_Y SCREEN_HEIGHT*0.25
+#define HORIZON_Y 200
+#define CAMERA_MARGIN 100
 
 //=================================
 //       STRUKTURY
@@ -27,6 +27,8 @@ extern "C" {
 struct Player {
 	int x;
 	int y;
+	int w;
+	int h;
 	double speed;
 };
 
@@ -35,27 +37,33 @@ struct Colors {
 	int green;
 	int red;
 	int blue;
-	int sky_color;
+	int lightBlue;
+	int lightGreen;
+};
+
+struct Camera {
+	int x;
+	int y;
+	int w;
+	int h;
+};
+
+struct GameTime {
+	double worldTime;
+	double delta;
+	int t1;
+	int t2;
+	int frames;
+	double fpsTimer;
+	double fps;
 };
 
 // g≥Ûwna struktura stanu gry
 struct GameState {
 	Player player;
 	Colors colors;
-
-	double moveSpeed;
-	double distance;
-	double worldTime;
-	double delta;
-	int t1;
-	int t2;
-
-	// Licznik FPS
-	int frames;
-	double fpsTimer;
-	double fps;
-
-	// Flaga wyjúcia
+	Camera camera;
+	GameTime time;
 	int quit;
 };
 
@@ -67,193 +75,56 @@ struct SDLContext {
 	SDL_Texture* scrtex;
 	SDL_Surface* charset;
 	SDL_Surface* player;
+	SDL_Surface* background;
 };
-
-
-//=================================
-//       FUNCKCJE DRAW
-//=================================
-
-// narysowanie napisu txt na powierzchni screen, zaczynajπc od punktu (x, y)
-// charset to bitmapa 128x128 zawierajπca znaki
-void DrawString(SDL_Surface *screen, int x, int y, const char *text,
-                SDL_Surface *charset) {
-	int px, py, c;
-	SDL_Rect s, d;
-	s.w = 8;
-	s.h = 8;
-	d.w = 8;
-	d.h = 8;
-	while(*text) {
-		c = *text & 255;
-		px = (c % 16) * 8;
-		py = (c / 16) * 8;
-		s.x = px;
-		s.y = py;
-		d.x = x;
-		d.y = y;
-		SDL_BlitSurface(charset, &s, screen, &d);
-		x += 8;
-		text++;
-		};
-	};
-
-// narysowanie na ekranie screen powierzchni sprite w punkcie (x, y)
-// (x, y) to punkt úrodka obrazka sprite na ekranie
-void DrawSurface(SDL_Surface *screen, SDL_Surface *sprite, int x, int y) {
-	SDL_Rect dest;
-	dest.x = x - sprite->w / 2;
-	dest.y = y - sprite->h / 2;
-	dest.w = sprite->w;
-	dest.h = sprite->h;
-	SDL_BlitSurface(sprite, NULL, screen, &dest);
-	};
-
-// rysowanie pojedynczego pixela
-void DrawPixel(SDL_Surface *surface, int x, int y, Uint32 color) {
-	int bpp = surface->format->BytesPerPixel;
-	Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
-	*(Uint32 *)p = color;
-	};
-
-// rysowanie linii o d≥ugoúci l w pionie (gdy dx = 0, dy = 1) 
-// bπdü poziomie (gdy dx = 1, dy = 0)
-void DrawLine(SDL_Surface *screen, int x, int y, int l, int dx, int dy, Uint32 color) {
-	for(int i = 0; i < l; i++) {
-		DrawPixel(screen, x, y, color);
-		x += dx;
-		y += dy;
-		};
-	};
-
-// rysowanie prostokπta o d≥ugoúci bokÛw l i k
-void DrawRectangle(SDL_Surface *screen, int x, int y, int l, int k,
-                   Uint32 outlineColor, Uint32 fillColor) {
-	int i;
-	DrawLine(screen, x, y, k, 0, 1, outlineColor);
-	DrawLine(screen, x + l - 1, y, k, 0, 1, outlineColor);
-	DrawLine(screen, x, y, l, 1, 0, outlineColor);
-	DrawLine(screen, x, y + k - 1, l, 1, 0, outlineColor);
-	for(i = y + 1; i < y + k - 1; i++)
-		DrawLine(screen, x + 1, i, l - 2, 1, 0, fillColor);
-	};
-
-// funkcja rysujπca pod≥ogÍ i t≥o o okreúlonyc
-void drawScene(SDL_Surface* screen, int backgroundColor, int floorColor) {
-	SDL_Rect bgRect = { 0, 0, SCREEN_WIDTH, HORIZON_Y };
-	SDL_FillRect(screen, &bgRect, backgroundColor);
-	SDL_Rect floorRect = { 0, HORIZON_Y, SCREEN_WIDTH, SCREEN_HEIGHT - HORIZON_Y };
-	SDL_FillRect(screen, &floorRect, floorColor);
-}
-
-void drawInfo(SDLContext* sdl, GameState* state) {
-	char text[128];
-	DrawRectangle(sdl->screen, 4, 4, SCREEN_WIDTH - 8, 36, state->colors.red, state->colors.blue);
-	sprintf(text, "Szablon drugiego zadania, czas trwania = %.1lf s  %.0lf klatek / s", state->worldTime, state->fps);
-	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 10, text, sdl->charset);
-	sprintf(text, "Esc - wyjscie, \030 - przyspieszenie, \031 - zwolnienie");
-	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 26, text, sdl->charset);
-}
-
-//=================================
-//       FUNCKCJE LOGIC
-//=================================
-
-// obs≥ugiwanie prostych zdarzeÒ typu escape
-// albo zakoÒczenie programu
-void handleEvents(GameState* state) {
-	SDL_Event event;
-	while (SDL_PollEvent(&event)) {
-		switch (event.type) {
-		case SDL_KEYDOWN:
-			if (event.key.keysym.sym == SDLK_ESCAPE) state->quit = 1;
-			break;
-		case SDL_QUIT:
-			state->quit = 1;
-			break;
-		};
-	};
-}
-
-// aktualizacja stanu gry
-void updateGame(GameState* state) {
-	// obliczanie czasu globalnego
-	state->t2 = SDL_GetTicks();
-	state->delta = (state->t2 - state->t1) * 0.001;
-	state->t1 = state->t2;
-	state->worldTime += state->delta;
-
-	// dodanie player sterowany
-	const Uint8* kaystate = SDL_GetKeyboardState(NULL);
-	if (kaystate[SDL_SCANCODE_W]) state->player.y -= (int)(state->moveSpeed * state->delta);
-	if (kaystate[SDL_SCANCODE_S]) state->player.y += (int)(state->moveSpeed * state->delta);
-	if (kaystate[SDL_SCANCODE_A]) state->player.x -= (int)(state->moveSpeed * state->delta);
-	if (kaystate[SDL_SCANCODE_D]) state->player.x += (int)(state->moveSpeed * state->delta);
-
-	// poruszanie siÍ
-	state->distance += state->player.speed * state->delta;
-
-	// obliczanie FPS
-	state->fpsTimer += state->delta;
-	if (state->fpsTimer > FPS_REFRESH) {
-		state->fps = state->frames * 2;
-		state->frames = 0;
-		state->fpsTimer -= FPS_REFRESH;
-	};
-	state->frames++;
-}
-
-void render(SDLContext* sdl, GameState* state) {
-	// rysowanie t≥a i pod≥ogi
-	drawScene(sdl->screen, state->colors.sky_color, state->colors.red);
-
-	// rysowanie gracza
-	DrawSurface(sdl->screen, sdl->player, (int)state->player.x, (int)state->player.y);
-
-	// rysowanie info na gÛrze
-	drawInfo(sdl, state);
-
-	// wysy≥anie na ekran
-	SDL_UpdateTexture(sdl->scrtex, NULL, sdl->screen->pixels, sdl->screen->pitch);
-	SDL_RenderCopy(sdl->renderer, sdl->scrtex, NULL, NULL);
-	SDL_RenderPresent(sdl->renderer);
-}
 
 //=================================
 //       FUNCKCJE SETUP
 //=================================
 
+void initPlayer(Player* player, int w, int h) {
+	player->w = w;
+	player->h = h;
+	player->x = SCREEN_WIDTH / 2;
+	player->y = SCREEN_HEIGHT / 2;
+	player->speed = PLAYER_SPEED;
+}
+
+void initCamera(Camera* camera) {
+	camera->x = -100;
+	camera->y = 0;
+	camera->w = SCREEN_WIDTH;
+	camera->h = SCREEN_HEIGHT;
+}
+
+void initTime(GameTime* time) {
+	time->worldTime = 0;
+	time->t1 = SDL_GetTicks();
+	time->frames = 0;
+	time->fpsTimer = 0;
+	time->fps = 0;
+}
+
+void initColors(Colors* colors, const SDL_PixelFormat* format) {
+	colors->black = SDL_MapRGB(format, 0x00, 0x00, 0x00);
+	colors->green = SDL_MapRGB(format, 0x00, 0xFF, 0x00);
+	colors->red = SDL_MapRGB(format, 0xFF, 0x00, 0x00);
+	colors->blue = SDL_MapRGB(format, 0x11, 0x11, 0xCC);
+	colors->lightBlue = SDL_MapRGB(format, 0x5D, 0xED, 0xF7);
+	colors->lightGreen = SDL_MapRGB(format, 0x7E, 0xC8, 0x50);
+}
+
 // inicjalizacja stanu gry oraz kolorÛw(dlatego przekazujemy surface ekranu)
-void initGameState(GameState* state, const SDL_Surface* screen) {
-	// Pozycje startowe
-	state->player.x = PLAYER_START_X_POS;
-	state->player.y = SCREEN_HEIGHT / 2 - PLAYER_START_X_POS;
-
-	// Parametry ruchu
-	state->player.speed = PLAYER_SPEED_VAL;
-	state->moveSpeed = MOVE_SPEED; // pixele na sekundÍ
-	state->distance = 0;
-
-	// Czas
-	state->worldTime = 0;
-	state->t1 = SDL_GetTicks();
-	state->frames = 0;
-	state->fpsTimer = 0;
-	state->fps = 0;
-
-	// Flagi
+void initGameState(GameState* state, const SDLContext* sdl) {
+	initPlayer(&state->player, sdl->player->w, sdl->player->h);
+	initCamera(&state->camera);
+	initTime(&state->time);
+	initColors(&state->colors, sdl->screen->format);
 	state->quit = 0;
-
-	// Mapowanie kolorÛw (wymaga formatu ekranu, dlatego przekazujemy screen)
-	state->colors.black = SDL_MapRGB(screen->format, 0x00, 0x00, 0x00);
-	state->colors.green = SDL_MapRGB(screen->format, 0x00, 0xFF, 0x00);
-	state->colors.red = SDL_MapRGB(screen->format, 0xFF, 0x00, 0x00);
-	state->colors.blue = SDL_MapRGB(screen->format, 0x11, 0x11, 0xCC);
-	state->colors.sky_color = SDL_MapRGB(screen->format, 0x5D, 0xED, 0xF7);
 }
 
 // funkcja inicjalizujπca bibliotekÍ SDL
-bool initSDL(SDLContext *sdl) {
+bool initSDL(SDLContext* sdl) {
 	if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
 		printf("SDL_Init error: %s\n", SDL_GetError());
 		return 1;
@@ -298,10 +169,20 @@ bool loadAssets(SDLContext* sdl) {
 	SDL_SetColorKey(sdl->charset, true, 0x000000);
 
 	// wczytanie obrazka (player)
-	sdl->player = SDL_LoadBMP("./eti.bmp");
+	sdl->player = SDL_LoadBMP("./player.bmp");
 	if (sdl->player == NULL) {
-		printf("SDL_LoadBMP(eti.bmp) error: %s\n", SDL_GetError());
+		printf("SDL_LoadBMP(player.bmp) error: %s\n", SDL_GetError());
 		SDL_FreeSurface(sdl->charset);
+		SDL_Quit();
+		return 1;
+	};
+
+	// wczytywanie t≥a
+	sdl->background = SDL_LoadBMP("./background.bmp");
+	if (sdl->background == NULL) {
+		printf("SDL_LoadBMP(background.bmp) error: %s\n", SDL_GetError());
+		SDL_FreeSurface(sdl->charset);
+		SDL_FreeSurface(sdl->player);
 		SDL_Quit();
 		return 1;
 	};
@@ -321,6 +202,196 @@ void cleanup(SDLContext* sdl) {
 
 	// Wy≥πczenie SDL
 	SDL_Quit();
+}
+
+
+//=================================
+//       FUNCKCJE DRAW
+//=================================
+
+// narysowanie napisu txt na powierzchni screen, zaczynajπc od punktu (x, y)
+// charset to bitmapa 128x128 zawierajπca znaki
+void DrawString(SDL_Surface *screen, int x, int y, const char *text,
+                SDL_Surface *charset) {
+	int px, py, c;
+	SDL_Rect s, d;
+	s.w = 8;
+	s.h = 8;
+	d.w = 8;
+	d.h = 8;
+	while(*text) {
+		c = *text & 255;
+		px = (c % 16) * 8;
+		py = (c / 16) * 8;
+		s.x = px;
+		s.y = py;
+		d.x = x;
+		d.y = y;
+		SDL_BlitSurface(charset, &s, screen, &d);
+		x += 8;
+		text++;
+		};
+	};
+
+// narysowanie na ekranie screen powierzchni sprite w punkcie (x, y)
+// (x, y) to punkt úrodka obrazka sprite na ekranie
+void DrawSurface(SDL_Surface *screen, SDL_Surface *sprite, int x, int y) {
+	SDL_Rect dest;
+	dest.x = x;
+	dest.y = y - sprite->h;
+	dest.w = sprite->w;
+	dest.h = sprite->h;
+	SDL_BlitSurface(sprite, NULL, screen, &dest);
+	};
+
+// rysowanie pojedynczego pixela
+void DrawPixel(SDL_Surface *surface, int x, int y, Uint32 color) {
+	int bpp = surface->format->BytesPerPixel;
+	Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
+	*(Uint32 *)p = color;
+	};
+
+// rysowanie linii o d≥ugoúci l w pionie (gdy dx = 0, dy = 1) 
+// bπdü poziomie (gdy dx = 1, dy = 0)
+void DrawLine(SDL_Surface *screen, int x, int y, int l, int dx, int dy, Uint32 color) {
+	for(int i = 0; i < l; i++) {
+		DrawPixel(screen, x, y, color);
+		x += dx;
+		y += dy;
+		};
+	};
+
+// rysowanie prostokπta o d≥ugoúci bokÛw l i k
+void DrawRectangle(SDL_Surface *screen, int x, int y, int l, int k,
+                   Uint32 outlineColor, Uint32 fillColor) {
+	int i;
+	DrawLine(screen, x, y, k, 0, 1, outlineColor);
+	DrawLine(screen, x + l - 1, y, k, 0, 1, outlineColor);
+	DrawLine(screen, x, y, l, 1, 0, outlineColor);
+	DrawLine(screen, x, y + k - 1, l, 1, 0, outlineColor);
+	for(i = y + 1; i < y + k - 1; i++)
+		DrawLine(screen, x + 1, i, l - 2, 1, 0, fillColor);
+	};
+
+// funkcja rysujπca pod≥ogÍ i t≥o o okreúlonych kolorach
+// na podstawie pozycji kamery
+void drawScene(SDL_Surface* screen, SDL_Surface* background, Camera* camera) {
+	SDL_Rect dest = { camera->x, camera->y, camera->w, camera->h };
+	SDL_BlitSurface(background, &dest, screen, NULL);
+}
+
+void drawInfo(SDLContext* sdl, GameState* state) {
+	char text[128];
+	DrawRectangle(sdl->screen, 4, 4, SCREEN_WIDTH - 8, 36, state->colors.red, state->colors.blue);
+	sprintf(text, "Czas trwania: %.1lf s  %.0lf fps", state->time.worldTime, state->time.fps);
+	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 10, text, sdl->charset);
+	sprintf(text, "Zrealizowano: obligatory-5/5 optional-0/8");
+	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 26, text, sdl->charset);
+}
+
+//=================================
+//       FUNCKCJE LOGIC
+//=================================
+
+void movePlayer(Player* player, double delta, int end) {
+	const Uint8* kaystate = SDL_GetKeyboardState(NULL);
+	if (kaystate[SDL_SCANCODE_W]) player->y -= (int)(player->speed * delta);
+	if (kaystate[SDL_SCANCODE_S]) player->y += (int)(player->speed * delta);
+	if (kaystate[SDL_SCANCODE_A]) player->x -= (int)(player->speed * delta);
+	if (kaystate[SDL_SCANCODE_D]) player->x += (int)(player->speed * delta);
+
+	if (player->y < HORIZON_Y) {
+		player->y = HORIZON_Y;
+	}
+	if (player->y > SCREEN_HEIGHT) {
+		player->y = SCREEN_HEIGHT;
+	}
+
+	// Blokada wyjúcia z lewej strony
+	if (player->x < 0) {
+		player->x = 0;
+	}
+	// Blokada wyjúcia z prawej strony
+	if (player->x > end - player->w) {
+		player->x = end - player->w;
+	}
+}
+
+void updateGameTime(GameTime *time) {
+	time->t2 = SDL_GetTicks();
+	time->delta = (time->t2 - time->t1) * 0.001;
+	time->t1 = time->t2;
+	time->worldTime += time->delta;
+
+	// obliczanie FPS
+	time->fpsTimer += time->delta;
+	if (time->fpsTimer > FPS_REFRESH) {
+		time->fps = time->frames * 2;
+		time->frames = 0;
+		time->fpsTimer -= FPS_REFRESH;
+	};
+	time->frames++;
+}
+
+void updateCamera(GameState* state, int mapWidth) {
+	// gdy gracz jest przy prawej krawÍdzi ekranu to ruch kamerπ
+	if ((state->player.x + state->player.w) > state->camera.x + SCREEN_WIDTH - CAMERA_MARGIN) {
+		state->camera.x = (state->player.x + state->player.w) - (SCREEN_WIDTH - CAMERA_MARGIN);
+	}// gdy gracz jest przy lewej krawÍdzi ekranu to ruch kamerπ
+	if (state->player.x < state->camera.x + CAMERA_MARGIN) {
+		state->camera.x = state->player.x - CAMERA_MARGIN;
+	}
+
+	// blokada po lewej
+	if (state->camera.x < 0) {
+		state->camera.x = 0;
+	}// blokada po prawej
+	if (state->camera.x > mapWidth - SCREEN_WIDTH) {
+		state->camera.x = mapWidth - SCREEN_WIDTH;
+	}
+}
+
+// obs≥ugiwanie prostych zdarzeÒ typu escape
+// albo zakoÒczenie programu
+void handleEvents(GameState* state, const SDLContext* sdl) {
+	SDL_Event event;
+	while (SDL_PollEvent(&event)) {
+		switch (event.type) {
+		case SDL_KEYDOWN:
+			if (event.key.keysym.sym == SDLK_ESCAPE) state->quit = 1;
+			if (event.key.keysym.sym == SDLK_n) initGameState(state, sdl);
+			break;
+		case SDL_QUIT:
+			state->quit = 1;
+			break;
+		};
+	};
+}
+
+// aktualizacja stanu gry
+void updateGame(GameState* state, SDLContext* sdl) {
+	printf("Player position: x=%d y=%d\n", state->player.x, state->player.y);
+	updateGameTime(&(state->time));
+	movePlayer(&(state->player), state->time.delta, sdl->background->w);
+	updateCamera(state, sdl->background->w);
+}
+
+void render(GameState* state, SDLContext* sdl) {
+	// rysowanie t≥a i pod≥ogi
+	drawScene(sdl->screen, sdl->background, &state->camera);
+
+	// rysowanie gracza
+	DrawSurface(sdl->screen, sdl->player,
+		(int)(state->player.x - state->camera.x),
+		(int)(state->player.y - state->camera.y));
+
+	// rysowanie info na gÛrze
+	drawInfo(sdl, state);
+
+	// wysy≥anie na ekran
+	SDL_UpdateTexture(sdl->scrtex, NULL, sdl->screen->pixels, sdl->screen->pitch);
+	SDL_RenderCopy(sdl->renderer, sdl->scrtex, NULL, NULL);
+	SDL_RenderPresent(sdl->renderer);
 }
 
 //=================================
@@ -347,13 +418,13 @@ int main(int argc, char **argv) {
 	}
 
 	// inicjalizacja stanu gry
-	initGameState(&state, sdl.screen);
+	initGameState(&state, &sdl);
 
 	// g≥Ûwna pÍtla gry
 	while(!state.quit) {
-		handleEvents(&state);
-		updateGame(&state);
-		render(&sdl, &state);
+		handleEvents(&state, &sdl);
+		updateGame(&state, &sdl);
+		render(&state, &sdl);
 	};
 
 	cleanup(&sdl);
