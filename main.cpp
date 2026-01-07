@@ -101,7 +101,7 @@ struct SDLContext {
 	SDL_Surface* screen;
 	SDL_Texture* scrtex;
 	SDL_Surface* charset;
-	SDL_Texture* player;
+	SDL_Texture* playerTex;
 	SDL_Texture* background;
 	int playerWidth;
 	int playerHeight;
@@ -202,9 +202,9 @@ bool loadAssets(SDLContext* sdl, Player* player) {
 	SDL_SetColorKey(sdl->charset, true, 0x000000);
 
 	// wczytywanie obrazu playera
-	sdl->player = loadTexture(sdl->renderer, "./player.bmp",
+	sdl->playerTex = loadTexture(sdl->renderer, "./player.bmp",
 		&sdl->playerWidth, &sdl->playerHeight);
-	if (!sdl->player) {
+	if (!sdl->playerTex) {
 		return false;
 	}
 
@@ -225,7 +225,7 @@ void cleanup(SDLContext* sdl) {
 	if (sdl->screen)  SDL_FreeSurface(sdl->screen);
 
 	// Zwalnianie tekstur, renderera i okna
-	if (sdl->player)   SDL_DestroyTexture(sdl->player);
+	if (sdl->playerTex)   SDL_DestroyTexture(sdl->playerTex);
 	if (sdl->background)   SDL_DestroyTexture(sdl->background);
 	if (sdl->scrtex)   SDL_DestroyTexture(sdl->scrtex);
 	if (sdl->renderer) SDL_DestroyRenderer(sdl->renderer);
@@ -330,15 +330,16 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 26, text, sdl->charset);
 }
 
-//void drawPlayer(SDL_Renderer* renderer, const Player* player, const Camera* camera, SDL_Texture* playerTex) {
-//	SDL_Rect dstRect = {
-//		(int)(player->x - camera->x),
-//		(int)(player->y - player->h - camera->y),
-//		player->w,
-//		player->h
-//	};
-//	SDL_RenderCopy(renderer, playerTex, NULL, &dstRect);
-//}
+void drawPlayer(SDL_Renderer* renderer, Player* player, Camera* camera, SDL_Texture* playerTex) {
+	SDL_Rect destRect;
+	destRect.x = (int)(player->x - camera->x);
+	destRect.y = (int)(player->y - camera->y) - player->h;
+	destRect.w = player->w;
+	destRect.h = player->h;
+
+	SDL_RendererFlip flip = (player->direction == LEFT) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+	SDL_RenderCopyEx(renderer, playerTex, NULL, &destRect, 0.0, NULL, flip);
+}
 
 
 //=================================
@@ -435,23 +436,8 @@ void updateGame(GameState* state, SDLContext* sdl) {
 }
 
 void render(GameState* state, SDLContext* sdl) {
-	// rysowanie t³a i pod³ogi
 	drawScene(sdl->renderer, sdl->background, &state->camera);
-
-	// rysowanie gracza
-	SDL_Rect destRect;
-	destRect.x = (int)(state->player.x - state->camera.x);
-	destRect.y = (int)(state->player.y - state->camera.y) - state->player.h;
-	destRect.w = state->player.w;
-	destRect.h = state->player.h;
-
-	SDL_RendererFlip flip = (state->player.direction == LEFT) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
-	SDL_RenderCopyEx(sdl->renderer, sdl->player, NULL, &destRect, 0.0, NULL, flip);
-
-	// 
-	SDL_FillRect(sdl->screen, NULL, 0x00000000);
-
-	// rysowanie info na górze
+	drawPlayer(sdl->renderer, &state->player, &state->camera, sdl->playerTex);
 	drawInfo(sdl, state);
 
 	// wysy³anie na ekran
