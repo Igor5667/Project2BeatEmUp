@@ -19,6 +19,32 @@ extern "C" {
 #define FPS_REFRESH 0.5
 #define HORIZON_Y 200
 #define CAMERA_MARGIN 100
+#define LEFT 1
+#define RIGHT 0
+
+//=================================
+//       FUNKCJE POMOCNICZE
+//=================================
+
+SDL_Texture* loadTexture(SDL_Renderer* renderer, const char* path, int* outW, int* outH) {
+	SDL_Surface* surface = SDL_LoadBMP(path);
+	if (!surface) {
+		printf("SDL_LoadBMP(%s) error: %s\n", path, SDL_GetError());
+		return NULL;
+	}
+
+	if (outW) *outW = surface->w;
+	if (outH) *outH = surface->h;
+
+	SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+	SDL_FreeSurface(surface);
+
+	if (!texture) {
+		printf("SDL_CreateTextureFromSurface(%s) error: %s\n", path, SDL_GetError());
+	}
+	return texture;
+}
+
 
 //=================================
 //       STRUKTURY
@@ -30,6 +56,7 @@ struct Player {
 	int w;
 	int h;
 	double speed;
+	int direction;
 };
 
 struct Colors {
@@ -74,8 +101,12 @@ struct SDLContext {
 	SDL_Surface* screen;
 	SDL_Texture* scrtex;
 	SDL_Surface* charset;
-	SDL_Surface* player;
-	SDL_Surface* background;
+	SDL_Texture* player;
+	SDL_Texture* background;
+	int playerWidth;
+	int playerHeight;
+	int bgWidth;
+	int bgHeight;
 };
 
 //=================================
@@ -88,6 +119,7 @@ void initPlayer(Player* player, int w, int h) {
 	player->x = SCREEN_WIDTH / 2;
 	player->y = SCREEN_HEIGHT / 2;
 	player->speed = PLAYER_SPEED;
+	player->direction = RIGHT;
 }
 
 void initCamera(Camera* camera) {
@@ -116,7 +148,7 @@ void initColors(Colors* colors, const SDL_PixelFormat* format) {
 
 // inicjalizacja stanu gry oraz kolorów(dlatego przekazujemy surface ekranu)
 void initGameState(GameState* state, const SDLContext* sdl) {
-	initPlayer(&state->player, sdl->player->w, sdl->player->h);
+	initPlayer(&state->player, sdl->playerWidth, sdl->playerHeight);
 	initCamera(&state->camera);
 	initTime(&state->time);
 	initColors(&state->colors, sdl->screen->format);
@@ -153,13 +185,14 @@ bool initSDL(SDLContext* sdl) {
 		SDL_TEXTUREACCESS_STREAMING,
 		SCREEN_WIDTH, SCREEN_HEIGHT);
 
+	SDL_SetTextureBlendMode(sdl->scrtex, SDL_BLENDMODE_BLEND);
 
 	// wy³¹czenie widocznoœci kursora myszy
 	SDL_ShowCursor(SDL_DISABLE);
 }
 
 // funkcja ³aduj¹ca zasoby (obrazy, czcionki, itp)
-bool loadAssets(SDLContext* sdl) {
+bool loadAssets(SDLContext* sdl, Player* player) {
 	// wczytanie czcionki cs8x8.bmp
 	sdl->charset = SDL_LoadBMP("./cs8x8.bmp");
 	if (sdl->charset == NULL) {
@@ -168,34 +201,32 @@ bool loadAssets(SDLContext* sdl) {
 	};
 	SDL_SetColorKey(sdl->charset, true, 0x000000);
 
-	// wczytanie obrazka (player)
-	sdl->player = SDL_LoadBMP("./player.bmp");
-	if (sdl->player == NULL) {
-		printf("SDL_LoadBMP(player.bmp) error: %s\n", SDL_GetError());
-		SDL_FreeSurface(sdl->charset);
-		SDL_Quit();
-		return 1;
-	};
+	// wczytywanie obrazu playera
+	sdl->player = loadTexture(sdl->renderer, "./player.bmp",
+		&sdl->playerWidth, &sdl->playerHeight);
+	if (!sdl->player) {
+		return false;
+	}
 
-	// wczytywanie t³a
-	sdl->background = SDL_LoadBMP("./background.bmp");
-	if (sdl->background == NULL) {
-		printf("SDL_LoadBMP(background.bmp) error: %s\n", SDL_GetError());
-		SDL_FreeSurface(sdl->charset);
-		SDL_FreeSurface(sdl->player);
-		SDL_Quit();
-		return 1;
-	};
+	// Background - tekstura GPU
+	sdl->background = loadTexture(sdl->renderer, "./background.bmp",
+		&sdl->bgWidth, &sdl->bgHeight);
+	if (!sdl->background) {
+		return false;
+	}
+
+	return true;
 }
 
 // funkcja czyszcz¹ca miejsce po SDL
 void cleanup(SDLContext* sdl) {
 	// Zwalnianie powierzchni (Surface)
-	if (sdl->player)     SDL_FreeSurface(sdl->player);
 	if (sdl->charset) SDL_FreeSurface(sdl->charset);
 	if (sdl->screen)  SDL_FreeSurface(sdl->screen);
 
 	// Zwalnianie tekstur, renderera i okna
+	if (sdl->player)   SDL_DestroyTexture(sdl->player);
+	if (sdl->background)   SDL_DestroyTexture(sdl->background);
 	if (sdl->scrtex)   SDL_DestroyTexture(sdl->scrtex);
 	if (sdl->renderer) SDL_DestroyRenderer(sdl->renderer);
 	if (sdl->window)   SDL_DestroyWindow(sdl->window);
@@ -275,9 +306,19 @@ void DrawRectangle(SDL_Surface *screen, int x, int y, int l, int k,
 
 // funkcja rysuj¹ca pod³ogê i t³o o okreœlonych kolorach
 // na podstawie pozycji kamery
-void drawScene(SDL_Surface* screen, SDL_Surface* background, Camera* camera) {
-	SDL_Rect dest = { camera->x, camera->y, camera->w, camera->h };
-	SDL_BlitSurface(background, &dest, screen, NULL);
+void drawScene(SDL_Renderer* renderer, SDL_Texture* background, Camera* camera) {
+	SDL_Rect srcRect = {
+		(int)camera->x,
+		(int)camera->y,
+		camera->w,
+		camera->h
+	};
+	SDL_Rect dstRect = { 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT };
+	SDL_RenderCopy(renderer, background, &srcRect, &dstRect);
+
+
+	//SDL_Rect rect = { camera->x, camera->y, camera->w, camera->h };
+	//SDL_BlitSurface(background, &dest, screen, NULL);
 }
 
 void drawInfo(SDLContext* sdl, GameState* state) {
@@ -289,6 +330,17 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 	DrawString(sdl->screen, sdl->screen->w / 2 - strlen(text) * 8 / 2, 26, text, sdl->charset);
 }
 
+//void drawPlayer(SDL_Renderer* renderer, const Player* player, const Camera* camera, SDL_Texture* playerTex) {
+//	SDL_Rect dstRect = {
+//		(int)(player->x - camera->x),
+//		(int)(player->y - player->h - camera->y),
+//		player->w,
+//		player->h
+//	};
+//	SDL_RenderCopy(renderer, playerTex, NULL, &dstRect);
+//}
+
+
 //=================================
 //       FUNCKCJE LOGIC
 //=================================
@@ -297,8 +349,14 @@ void movePlayer(Player* player, double delta, int end) {
 	const Uint8* kaystate = SDL_GetKeyboardState(NULL);
 	if (kaystate[SDL_SCANCODE_W]) player->y -= (int)(player->speed * delta);
 	if (kaystate[SDL_SCANCODE_S]) player->y += (int)(player->speed * delta);
-	if (kaystate[SDL_SCANCODE_A]) player->x -= (int)(player->speed * delta);
-	if (kaystate[SDL_SCANCODE_D]) player->x += (int)(player->speed * delta);
+	if (kaystate[SDL_SCANCODE_A]) {
+		player->x -= (int)(player->speed * delta);
+		player->direction = LEFT;
+	}
+	if (kaystate[SDL_SCANCODE_D]) { 
+		player->x += (int)(player->speed * delta);
+		player->direction = RIGHT;
+	};
 
 	if (player->y < HORIZON_Y) {
 		player->y = HORIZON_Y;
@@ -372,18 +430,26 @@ void handleEvents(GameState* state, const SDLContext* sdl) {
 void updateGame(GameState* state, SDLContext* sdl) {
 	printf("Player position: x=%d y=%d\n", state->player.x, state->player.y);
 	updateGameTime(&(state->time));
-	movePlayer(&(state->player), state->time.delta, sdl->background->w);
-	updateCamera(state, sdl->background->w);
+	movePlayer(&(state->player), state->time.delta, sdl->bgWidth);
+	updateCamera(state, sdl->bgWidth);
 }
 
 void render(GameState* state, SDLContext* sdl) {
 	// rysowanie t³a i pod³ogi
-	drawScene(sdl->screen, sdl->background, &state->camera);
+	drawScene(sdl->renderer, sdl->background, &state->camera);
 
 	// rysowanie gracza
-	DrawSurface(sdl->screen, sdl->player,
-		(int)(state->player.x - state->camera.x),
-		(int)(state->player.y - state->camera.y));
+	SDL_Rect destRect;
+	destRect.x = (int)(state->player.x - state->camera.x);
+	destRect.y = (int)(state->player.y - state->camera.y) - state->player.h;
+	destRect.w = state->player.w;
+	destRect.h = state->player.h;
+
+	SDL_RendererFlip flip = (state->player.direction == LEFT) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+	SDL_RenderCopyEx(sdl->renderer, sdl->player, NULL, &destRect, 0.0, NULL, flip);
+
+	// 
+	SDL_FillRect(sdl->screen, NULL, 0x00000000);
 
 	// rysowanie info na górze
 	drawInfo(sdl, state);
@@ -412,7 +478,7 @@ int main(int argc, char **argv) {
 	}
 
 	// pobieranie zasobów
-	if (!loadAssets(&sdl)) {
+	if (!loadAssets(&sdl, &state.player)) {
 		cleanup(&sdl);
 		return 1;
 	}
