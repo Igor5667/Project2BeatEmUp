@@ -21,6 +21,41 @@ extern "C" {
 #define CAMERA_MARGIN 100
 #define LEFT 1
 #define RIGHT 0
+#define ACTION_IDLE 0
+#define ACTION_LIGHT 1
+#define ACTION_HEAVY 2
+#define INPUT_BUFFER_SIZE 5
+#define MAX_SEQ_LEN 10
+#define MAX_SEQUENCES 5
+
+enum GameInput {
+	INPUT_NONE = 0,
+	INPUT_UP,
+	INPUT_DOWN,
+	INPUT_LEFT,
+	INPUT_RIGHT,
+	INPUT_ATTACK_LIGHT,
+	INPUT_ATTACK_HEAVY,
+	INPUT_DEV_MODE
+};
+
+// tablice nazw wprowadzonych akcji (do opcji debug)
+const char* actionNames[] = {
+	"IDLE",     // 0
+	"LIGHT",    // 1
+	"HEAVY"     // 2
+};
+const char* inputNames[] = {
+	"...",      // INPUT_NONE
+	"UP",       // INPUT_UP
+	"DOWN",     // INPUT_DOWN
+	"LEFT",     // INPUT_LEFT
+	"RIGHT",    // INPUT_RIGHT
+	"L_ATK",    // INPUT_ATTACK_LIGHT
+	"H_ATK",    // INPUT_ATTACK_HEAVY
+	"DEV"       // INPUT_DEV_MODE
+};
+
 
 //=================================
 //       FUNKCJE POMOCNICZE
@@ -50,6 +85,18 @@ SDL_Texture* loadTexture(SDL_Renderer* renderer, const char* path, int* outW, in
 //       STRUKTURY
 //=================================
 
+struct Sequence {
+	const char* name;
+	int sequence[MAX_SEQ_LEN];
+	int len;
+	int maxTimeGap;
+};
+
+struct InputEvenet {
+	int input;
+	Uint32 time;
+};
+
 struct Player {
 	int x;
 	int y;
@@ -57,6 +104,8 @@ struct Player {
 	int h;
 	double speed;
 	int direction;
+	int currentAction;   // Przechowuje stan (IDLE, LIGHT, HEAVY)
+	double actionTimer;
 };
 
 struct Colors {
@@ -75,7 +124,7 @@ struct Camera {
 	int h;
 };
 
-struct GameTime {
+struct Time {
 	double worldTime;
 	double delta;
 	int t1;
@@ -85,13 +134,24 @@ struct GameTime {
 	double fps;
 };
 
+struct Buffer {
+	InputEvenet inputs[INPUT_BUFFER_SIZE];
+	int headIndex;
+	int previousHeadIndex;
+	bool showDebug;
+};
+
 // g³ówna struktura stanu gry
 struct GameState {
 	Player player;
 	Colors colors;
 	Camera camera;
-	GameTime time;
+	Time time;
+	Buffer buffer;
 	int quit;
+
+	Sequence definedSeqences[MAX_SEQUENCES];
+	int sequencesCount;
 };
 
 // struktura obs³uguj¹ca bibliotekê SDL
@@ -101,7 +161,13 @@ struct SDLContext {
 	SDL_Surface* screen;
 	SDL_Texture* scrtex;
 	SDL_Surface* charset;
-	SDL_Texture* playerTex;
+
+	SDL_Texture* playerIdle;
+	SDL_Texture* playerAttLight;
+	SDL_Texture* playerAttHeavy;
+
+
+
 	SDL_Texture* background;
 	int playerWidth;
 	int playerHeight;
@@ -120,6 +186,8 @@ void initPlayer(Player* player, int w, int h) {
 	player->y = SCREEN_HEIGHT / 2;
 	player->speed = PLAYER_SPEED;
 	player->direction = RIGHT;
+	player->currentAction = ACTION_IDLE;
+	player->actionTimer = 0.0;
 }
 
 void initCamera(Camera* camera) {
@@ -129,7 +197,7 @@ void initCamera(Camera* camera) {
 	camera->h = SCREEN_HEIGHT;
 }
 
-void initTime(GameTime* time) {
+void initTime(Time* time) {
 	time->worldTime = 0;
 	time->t1 = SDL_GetTicks();
 	time->frames = 0;
@@ -146,12 +214,44 @@ void initColors(Colors* colors, const SDL_PixelFormat* format) {
 	colors->lightGreen = SDL_MapRGB(format, 0x7E, 0xC8, 0x50);
 }
 
+void initBuffer(Buffer* buffer) {
+	buffer->headIndex = 0;
+	buffer->previousHeadIndex = 0;
+	buffer->showDebug = false;
+
+	for (int i = 0; i < INPUT_BUFFER_SIZE; i++) {
+		buffer->inputs[i].input = INPUT_NONE;
+		buffer->inputs[i].time = 0;
+	}
+}
+
+void initSequences(GameState* state) {
+	state->sequencesCount = 0;
+
+	Sequence* s1 = &state->definedSeqences[state->sequencesCount++];
+	s1->name = "Triple hit";
+	s1->len = 3;
+	s1->sequence[0] = INPUT_ATTACK_LIGHT;
+	s1->sequence[1] = INPUT_ATTACK_LIGHT;
+	s1->sequence[2] = INPUT_ATTACK_LIGHT;
+	s1->maxTimeGap = 250;
+
+	Sequence* s2 = &state->definedSeqences[state->sequencesCount++];
+	s2->name = "Dash Right";
+	s2->len = 2;
+	s2->sequence[0] = INPUT_RIGHT;
+	s2->sequence[1] = INPUT_RIGHT;
+	s2->maxTimeGap = 200;
+}
+
 // inicjalizacja stanu gry oraz kolorów(dlatego przekazujemy surface ekranu)
 void initGameState(GameState* state, const SDLContext* sdl) {
 	initPlayer(&state->player, sdl->playerWidth, sdl->playerHeight);
 	initCamera(&state->camera);
 	initTime(&state->time);
 	initColors(&state->colors, sdl->screen->format);
+	initBuffer(&state->buffer);
+	initSequences(state);
 	state->quit = 0;
 }
 
@@ -201,10 +301,24 @@ bool loadAssets(SDLContext* sdl, Player* player) {
 	};
 	SDL_SetColorKey(sdl->charset, true, 0x000000);
 
-	// wczytywanie obrazu playera
-	sdl->playerTex = loadTexture(sdl->renderer, "./player.bmp",
+	// wczytywanie obrazu playera IDLE
+	sdl->playerIdle = loadTexture(sdl->renderer, "./player_idle.bmp",
 		&sdl->playerWidth, &sdl->playerHeight);
-	if (!sdl->playerTex) {
+	if (!sdl->playerIdle) {
+		return false;
+	}
+
+	// wczytywanie obrazu playera LIGHT ATTACK
+	sdl->playerAttLight = loadTexture(sdl->renderer, "./player_att_light.bmp",
+		&sdl->playerWidth, &sdl->playerHeight);
+	if (!sdl->playerAttLight) {
+		return false;
+	}
+
+	// wczytywanie obrazu playera HEAVY ATTACK
+	sdl->playerAttHeavy = loadTexture(sdl->renderer, "./player_att_heavy.bmp",
+		&sdl->playerWidth, &sdl->playerHeight);
+	if (!sdl->playerAttHeavy) {
 		return false;
 	}
 
@@ -225,7 +339,9 @@ void cleanup(SDLContext* sdl) {
 	if (sdl->screen)  SDL_FreeSurface(sdl->screen);
 
 	// Zwalnianie tekstur, renderera i okna
-	if (sdl->playerTex)   SDL_DestroyTexture(sdl->playerTex);
+	if (sdl->playerIdle)   SDL_DestroyTexture(sdl->playerIdle);
+	if (sdl->playerAttLight)   SDL_DestroyTexture(sdl->playerAttLight);
+	if (sdl->playerAttHeavy)   SDL_DestroyTexture(sdl->playerAttHeavy);
 	if (sdl->background)   SDL_DestroyTexture(sdl->background);
 	if (sdl->scrtex)   SDL_DestroyTexture(sdl->scrtex);
 	if (sdl->renderer) SDL_DestroyRenderer(sdl->renderer);
@@ -341,10 +457,106 @@ void drawPlayer(SDL_Renderer* renderer, Player* player, Camera* camera, SDL_Text
 	SDL_RenderCopyEx(renderer, playerTex, NULL, &destRect, 0.0, NULL, flip);
 }
 
+void drawDebugOverlay(SDLContext* sdl, GameState* state) {
+	if (state->buffer.showDebug) {
+		char text[512];
+		char temp[64];
+
+		sprintf(text, "DEBUG: Action: %s | Buffer: [ ", actionNames[state->player.currentAction]);
+		for (int i = 0; i < INPUT_BUFFER_SIZE; i++) {
+            sprintf(temp, "%s ", inputNames[state->buffer.inputs[i].input]);
+            strcat(text, temp);
+        }
+        strcat(text, "]");
+
+		DrawString(sdl->screen, 10, SCREEN_HEIGHT-15, text, sdl->charset);
+	}
+}
 
 //=================================
 //       FUNCKCJE LOGIC
 //=================================
+
+// funkcja sprawdza element n-ty od koñca
+// 0 - zwraca ostatni, 1 - przedostatni
+InputEvenet* getInputBack(Buffer* buffer, int stepsBack) {
+	int index = (buffer->headIndex - 1 - stepsBack + INPUT_BUFFER_SIZE) % INPUT_BUFFER_SIZE;
+	return &buffer->inputs[index];
+}
+
+bool checkSequence(Buffer* buffer, Sequence* sequence) {
+	for (int i = 0; i < sequence->len; i++) {
+		int requiredInput = sequence->sequence[sequence->len - 1 - i];
+		InputEvenet* event = getInputBack(buffer, i);
+
+		// sprawdzanie czy odpowiedni input
+		if (event->input != requiredInput) {
+			return false;
+		}
+
+		// sprawdzanie czy za wolno
+		if (i > 0) {
+			InputEvenet* nextEvent = getInputBack(buffer, i - 1);
+			Uint32 diff = nextEvent->time - event->time;
+			if (diff > sequence->maxTimeGap) {
+				return false;
+			}
+		}
+	}
+
+	// Jeœli pêtla przesz³a do koñca, to znaczy, ¿e wszystko pasuje!
+	return true;
+}
+
+void resolveInputs(GameState* state) {
+	// sprawdzanie combosów
+	for (int i = 0; i < state->sequencesCount; i++) {
+		if (checkSequence(&state->buffer, &state->definedSeqences[i])) {
+
+			// Logujemy sukces w konsoli
+			if (state->buffer.showDebug) {
+				printf(">>> COMBO DETECTED: %s <<<\n", state->definedSeqences[i].name);
+			}
+
+			// co ma sie staæ w danym combo
+			if (strcmp(state->definedSeqences[i].name, "Triple hit") == 0) {
+				state->player.currentAction = ACTION_HEAVY;
+				state->player.actionTimer = 0.5;
+			}
+			else if (strcmp(state->definedSeqences[i].name, "Dash Right") == 0) {
+				state->player.x += 100;
+			}
+
+			return;
+		}
+	}
+
+	// sprawdzanie podjedyñczych klikniêæ
+	InputEvenet* lastEvent = getInputBack(&state->buffer, 0);
+	if (lastEvent->input == INPUT_ATTACK_LIGHT) {
+		if (state->player.currentAction != ACTION_HEAVY) {
+			state->player.currentAction = ACTION_LIGHT;
+			state->player.actionTimer = 0.2;
+		}
+	}
+}
+
+void updatePlayerAction(GameState* state) {
+	if (state->buffer.headIndex != state->buffer.previousHeadIndex) {
+		resolveInputs(state);
+		state->buffer.previousHeadIndex = state->buffer.headIndex;
+	}
+
+	if (state->player.currentAction != ACTION_IDLE) {
+		state->player.actionTimer -= state->time.delta;
+
+		// Jeœli czas min¹³ koniec ataku
+		if (state->player.actionTimer <= 0) {
+			state->player.currentAction = ACTION_IDLE;
+			state->player.actionTimer = 0;
+		}
+	}
+}
 
 void movePlayer(Player* player, double delta, int end) {
 	const Uint8* kaystate = SDL_GetKeyboardState(NULL);
@@ -376,7 +588,7 @@ void movePlayer(Player* player, double delta, int end) {
 	}
 }
 
-void updateGameTime(GameTime *time) {
+void updateTime(Time *time) {
 	time->t2 = SDL_GetTicks();
 	time->delta = (time->t2 - time->t1) * 0.001;
 	time->t1 = time->t2;
@@ -410,35 +622,80 @@ void updateCamera(GameState* state, int mapWidth) {
 	}
 }
 
+void updateInputs(GameState* state) {
+	
+}
+
+void pushInput(Buffer* buffer, int inputCode) {
+	buffer->inputs[buffer->headIndex].input = inputCode;
+	buffer->inputs[buffer->headIndex].time = SDL_GetTicks();
+	buffer->headIndex = (buffer->headIndex + 1) % INPUT_BUFFER_SIZE;
+}
+
+SDL_Texture* getCurrentPlayerTexture(SDLContext* sdl, int currAction) {
+	switch (currAction) {
+		case ACTION_IDLE:
+			return sdl->playerIdle;
+		case ACTION_LIGHT:
+			return sdl->playerAttLight;
+		case ACTION_HEAVY:
+			return sdl->playerAttHeavy;
+		default:
+			return sdl->playerIdle;
+	}
+}
+
 // obs³ugiwanie prostych zdarzeñ typu escape
 // albo zakoñczenie programu
 void handleEvents(GameState* state, const SDLContext* sdl) {
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
-		case SDL_KEYDOWN:
-			if (event.key.keysym.sym == SDLK_ESCAPE) state->quit = 1;
-			if (event.key.keysym.sym == SDLK_n) initGameState(state, sdl);
-			break;
-		case SDL_QUIT:
-			state->quit = 1;
-			break;
-		};
+			case SDL_KEYDOWN:
+				if (event.key.keysym.sym == SDLK_ESCAPE) state->quit = 1;
+				if (event.key.keysym.sym == SDLK_n) initGameState(state, sdl);
+
+				if (event.key.repeat == 0) {
+					int gameInput = INPUT_NONE;
+					switch (event.key.keysym.sym) {
+						case SDLK_w:	gameInput = INPUT_UP; break;
+						case SDLK_s:	gameInput = INPUT_DOWN; break;
+						case SDLK_a:	gameInput = INPUT_LEFT; break;
+						case SDLK_d:    gameInput = INPUT_RIGHT; break;
+						case SDLK_p:	gameInput = INPUT_ATTACK_LIGHT; break;
+						case SDLK_t:	state->buffer.showDebug = !state->buffer.showDebug; break;
+					}
+					if (gameInput != INPUT_NONE) {
+						pushInput(&state->buffer, gameInput);
+					}
+				}
+				break;
+			case SDL_QUIT:
+				state->quit = 1;
+				break;
+			};
 	};
 }
 
 // aktualizacja stanu gry
 void updateGame(GameState* state, SDLContext* sdl) {
-	printf("Player position: x=%d y=%d\n", state->player.x, state->player.y);
-	updateGameTime(&(state->time));
-	movePlayer(&(state->player), state->time.delta, sdl->bgWidth);
+	updatePlayerAction(state);
+	updateTime(&state->time);
+	movePlayer(&state->player, state->time.delta, sdl->bgWidth);
 	updateCamera(state, sdl->bgWidth);
 }
 
 void render(GameState* state, SDLContext* sdl) {
+	// czyszczenie ekranu przed now¹ klatk¹
+	SDL_FillRect(sdl->screen, NULL, SDL_MapRGBA(sdl->screen->format, 0, 0, 0, 0));
+
 	drawScene(sdl->renderer, sdl->background, &state->camera);
-	drawPlayer(sdl->renderer, &state->player, &state->camera, sdl->playerTex);
+
+	SDL_Texture* currentPlayerTexture = getCurrentPlayerTexture(sdl, state->player.currentAction);
+	drawPlayer(sdl->renderer, &state->player, &state->camera, currentPlayerTexture);
+
 	drawInfo(sdl, state);
+	drawDebugOverlay(sdl, state);
 
 	// wysy³anie na ekran
 	SDL_UpdateTexture(sdl->scrtex, NULL, sdl->screen->pixels, sdl->screen->pitch);
@@ -454,8 +711,8 @@ void render(GameState* state, SDLContext* sdl) {
 extern "C"
 #endif
 int main(int argc, char **argv) {
-	GameState state;
 	SDLContext sdl = {};
+	GameState state;
 
 	// inicjalizacja biblioteki SDL
 	if (!initSDL(&sdl)) {
