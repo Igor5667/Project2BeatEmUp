@@ -109,6 +109,11 @@ struct Player {
 	double actionTimer;
 };
 
+struct Enemy {
+	int x, y;
+	int h, w;
+};
+
 struct Colors {
 	int black;
 	int green;
@@ -145,6 +150,7 @@ struct Buffer {
 // g³ówna struktura stanu gry
 struct GameState {
 	Player player;
+	Enemy enemy;
 	Colors colors;
 	Camera camera;
 	Time time;
@@ -168,9 +174,13 @@ struct SDLContext {
 	SDL_Texture* playerAttHeavy;
 	SDL_Texture* playerJump;
 
+	SDL_Texture* enemyIdle;
+
 	SDL_Texture* background;
 	int playerWidth;
 	int playerHeight;
+	int enemyWidth;
+	int enemyHeight;
 	int bgWidth;
 	int bgHeight;
 };
@@ -188,6 +198,13 @@ void initPlayer(Player* player, int w, int h) {
 	player->direction = RIGHT;
 	player->currentAction = ACTION_IDLE;
 	player->actionTimer = 0.0;
+}
+
+void initEnemy(Enemy* enemy, int w, int h) {
+	enemy->x = 500;
+	enemy->y = 300;
+	enemy->w = w; // Przyk³adowa szerokoœæ
+	enemy->h = h; // Przyk³adowa wysokoœæ
 }
 
 void initCamera(Camera* camera) {
@@ -263,6 +280,7 @@ void initSequences(GameState* state) {
 // inicjalizacja stanu gry oraz kolorów(dlatego przekazujemy surface ekranu)
 void initGameState(GameState* state, const SDLContext* sdl) {
 	initPlayer(&state->player, sdl->playerWidth, sdl->playerHeight);
+	initEnemy(&state->enemy, sdl->enemyWidth, sdl->enemyHeight);
 	initCamera(&state->camera);
 	initTime(&state->time);
 	initColors(&state->colors, sdl->screen->format);
@@ -308,7 +326,7 @@ bool initSDL(SDLContext* sdl) {
 }
 
 // funkcja ³aduj¹ca zasoby (obrazy, czcionki, itp)
-bool loadAssets(SDLContext* sdl, Player* player) {
+bool loadAssets(SDLContext* sdl) {
 	// wczytanie czcionki cs8x8.bmp
 	sdl->charset = SDL_LoadBMP("./cs8x8.bmp");
 	if (sdl->charset == NULL) {
@@ -341,7 +359,14 @@ bool loadAssets(SDLContext* sdl, Player* player) {
 	// wczytywanie obrazu playera JUMP
 	sdl->playerJump = loadTexture(sdl->renderer, "./player_jump.bmp",
 		&sdl->playerWidth, &sdl->playerHeight);
-	if (!sdl->playerAttHeavy) {
+	if (!sdl->playerJump) {
+		return false;
+	}
+
+	// wczytywanie obrazu playera JUMP
+	sdl->enemyIdle = loadTexture(sdl->renderer, "./enemy_idle.bmp",
+		&sdl->enemyWidth, &sdl->enemyHeight);
+	if (!sdl->enemyIdle) {
 		return false;
 	}
 
@@ -494,6 +519,16 @@ void drawDebugOverlay(SDLContext* sdl, GameState* state) {
 
 		DrawString(sdl->screen, 10, SCREEN_HEIGHT-15, text, sdl->charset);
 	}
+}
+
+void drawEnemy(SDL_Renderer* renderer, Enemy* enemy, Camera* camera, SDL_Texture* enemyTex) {
+	SDL_Rect destRect;
+	destRect.x = enemy->x - camera->x;
+	destRect.y = enemy->y - camera->y;
+	destRect.w = enemy->w;
+	destRect.h = enemy->h;
+
+	SDL_RenderCopyEx(renderer, enemyTex, NULL, &destRect, 0.0, NULL, SDL_FLIP_HORIZONTAL);
 }
 
 //=================================
@@ -729,6 +764,8 @@ void render(GameState* state, SDLContext* sdl) {
 
 	drawScene(sdl->renderer, sdl->background, &state->camera);
 
+	drawEnemy(sdl->renderer, &state->enemy, &state->camera, sdl->enemyIdle);
+
 	SDL_Texture* currentPlayerTexture = getCurrentPlayerTexture(sdl, state->player.currentAction);
 	drawPlayer(sdl->renderer, &state->player, &state->camera, currentPlayerTexture);
 
@@ -759,7 +796,7 @@ int main(int argc, char **argv) {
 	}
 
 	// pobieranie zasobów
-	if (!loadAssets(&sdl, &state.player)) {
+	if (!loadAssets(&sdl)) {
 		cleanup(&sdl);
 		return 1;
 	}
