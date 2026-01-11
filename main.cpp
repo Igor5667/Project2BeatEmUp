@@ -24,6 +24,7 @@ extern "C" {
 #define ACTION_IDLE 0
 #define ACTION_LIGHT 1
 #define ACTION_HEAVY 2
+#define ACTION_JUMP 3
 #define INPUT_BUFFER_SIZE 5
 #define MAX_SEQ_LEN 10
 #define MAX_SEQUENCES 5
@@ -165,8 +166,7 @@ struct SDLContext {
 	SDL_Texture* playerIdle;
 	SDL_Texture* playerAttLight;
 	SDL_Texture* playerAttHeavy;
-
-
+	SDL_Texture* playerJump;
 
 	SDL_Texture* background;
 	int playerWidth;
@@ -242,6 +242,22 @@ void initSequences(GameState* state) {
 	s2->sequence[0] = INPUT_RIGHT;
 	s2->sequence[1] = INPUT_RIGHT;
 	s2->maxTimeGap = 200;
+
+	Sequence* s3 = &state->definedSeqences[state->sequencesCount++];
+	s3->name = "Dash Left";
+	s3->len = 2;
+	s3->sequence[0] = INPUT_LEFT;
+	s3->sequence[1] = INPUT_LEFT;
+	s3->maxTimeGap = 200;
+
+	Sequence* s4 = &state->definedSeqences[state->sequencesCount++];
+	s4->name = "Jump";
+	s4->len = 2;
+	s4->sequence[0] = INPUT_ATTACK_HEAVY;
+	s4->sequence[1] = INPUT_ATTACK_LIGHT;
+	s4->sequence[2] = INPUT_ATTACK_HEAVY;
+	s4->sequence[3] = INPUT_ATTACK_LIGHT;
+	s4->maxTimeGap = 200;
 }
 
 // inicjalizacja stanu gry oraz kolorów(dlatego przekazujemy surface ekranu)
@@ -317,6 +333,13 @@ bool loadAssets(SDLContext* sdl, Player* player) {
 
 	// wczytywanie obrazu playera HEAVY ATTACK
 	sdl->playerAttHeavy = loadTexture(sdl->renderer, "./player_att_heavy.bmp",
+		&sdl->playerWidth, &sdl->playerHeight);
+	if (!sdl->playerAttHeavy) {
+		return false;
+	}
+
+	// wczytywanie obrazu playera JUMP
+	sdl->playerJump = loadTexture(sdl->renderer, "./player_jump.bmp",
 		&sdl->playerWidth, &sdl->playerHeight);
 	if (!sdl->playerAttHeavy) {
 		return false;
@@ -523,8 +546,15 @@ void resolveInputs(GameState* state) {
 				state->player.currentAction = ACTION_HEAVY;
 				state->player.actionTimer = 0.5;
 			}
+			else if (strcmp(state->definedSeqences[i].name, "Jump") == 0) {
+				state->player.currentAction = ACTION_JUMP;
+				state->player.actionTimer = 0.8;
+			}
 			else if (strcmp(state->definedSeqences[i].name, "Dash Right") == 0) {
 				state->player.x += 100;
+			}
+			else if (strcmp(state->definedSeqences[i].name, "Dash Left") == 0) {
+				state->player.x -= 100;
 			}
 
 			return;
@@ -538,6 +568,11 @@ void resolveInputs(GameState* state) {
 			state->player.currentAction = ACTION_LIGHT;
 			state->player.actionTimer = 0.2;
 		}
+	}
+
+	if (lastEvent->input == INPUT_ATTACK_HEAVY) {
+		state->player.currentAction = ACTION_HEAVY;
+		state->player.actionTimer = 0.5;
 	}
 }
 
@@ -640,6 +675,8 @@ SDL_Texture* getCurrentPlayerTexture(SDLContext* sdl, int currAction) {
 			return sdl->playerAttLight;
 		case ACTION_HEAVY:
 			return sdl->playerAttHeavy;
+		case ACTION_JUMP:
+			return sdl->playerJump;
 		default:
 			return sdl->playerIdle;
 	}
@@ -663,6 +700,7 @@ void handleEvents(GameState* state, const SDLContext* sdl) {
 						case SDLK_a:	gameInput = INPUT_LEFT; break;
 						case SDLK_d:    gameInput = INPUT_RIGHT; break;
 						case SDLK_p:	gameInput = INPUT_ATTACK_LIGHT; break;
+						case SDLK_o:	gameInput = INPUT_ATTACK_HEAVY; break;
 						case SDLK_t:	state->buffer.showDebug = !state->buffer.showDebug; break;
 					}
 					if (gameInput != INPUT_NONE) {
