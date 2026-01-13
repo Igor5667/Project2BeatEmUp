@@ -20,9 +20,19 @@ extern "C" {
 #define FPS_REFRESH 0.5
 // player
 #define PLAYER_START_X_POS 45
-#define PLAYER_SPEED 500.0 // pixele na sekundê
+#define PLAYER_SPEED 400.0 // pixele na sekundê
 #define PLAYER_WIDTH 128
 #define PLAYER_HEIGHT 128
+#define HURTBOX_WIDTH 68
+#define HURTBOX_HEIGHT 98
+#define HURTBOX_OFF_X 30
+#define HURTBOX_OFF_Y 30
+// predkoœci animacji
+#define ANIM_SPEED_WALK 0.1
+#define ANIM_SPEED_IDLE 0.35
+#define TIME_ATTACK_LIGHT 0.3
+#define TIME_ATTACK_HEAVY 0.7
+#define TIME_JUMP 1
 // directions
 #define LEFT 1
 #define RIGHT 0
@@ -31,6 +41,7 @@ extern "C" {
 #define ACTION_LIGHT 1
 #define ACTION_HEAVY 2
 #define ACTION_JUMP 3
+#define ACTION_WALK 4
 // buffer
 #define INPUT_BUFFER_SIZE 5
 #define MAX_SEQ_LEN 10
@@ -178,13 +189,6 @@ struct SDLContext {
 	SDL_Texture* scrtex;
 	SDL_Surface* charset;
 
-	SDL_Texture* playerIdle;
-	SDL_Texture* playerAttLight;
-	SDL_Texture* playerAttHeavy;
-	SDL_Texture* playerJump;
-	int playerHeight;
-	int playerWidth;
-
 	SDL_Texture* enemyIdle;
 	int enemyWidth;
 	int enemyHeight;
@@ -259,10 +263,10 @@ SDL_Rect getAttackBox(Player* player) {
 
 	// ustawianie kierunku ataku
 	if (player->direction == RIGHT) {
-		box.x = player->x + player->w;
+		box.x = player->x + player->w - HURTBOX_OFF_X;
 	}
 	else {
-		box.x = player->x - box.w;
+		box.x = player->x - box.w + HURTBOX_OFF_X;
 	}
 
 	return box;
@@ -279,7 +283,7 @@ InputEvenet* getInputBack(Buffer* buffer, int stepsBack) {
 //       FUNCKCJE SETUP
 //=================================
 
-void initPlayer(Player* player, int w, int h) {
+void initPlayer(Player* player) {
 	player->w = PLAYER_WIDTH;
 	player->h = PLAYER_HEIGHT;
 	player->x = SCREEN_WIDTH / 2;
@@ -378,7 +382,7 @@ void initScore(Score* score) {
 
 // inicjalizacja stanu gry oraz kolorów(dlatego przekazujemy surface ekranu)
 void initGameState(GameState* state, const SDLContext* sdl) {
-	initPlayer(&state->player, sdl->playerWidth, sdl->playerHeight);
+	initPlayer(&state->player);
 	initEnemy(&state->enemy, sdl->enemyWidth, sdl->enemyHeight);
 	initCamera(&state->camera);
 	initTime(&state->time);
@@ -436,10 +440,6 @@ bool loadAssets(SDLContext* sdl, GameState* state) {
 	SDL_SetColorKey(sdl->charset, true, 0x000000);
 
 	// wczytywanie tekstur
-	sdl->playerIdle = loadTexture(sdl->renderer, "./textures/player_idle.bmp", &sdl->playerWidth, &sdl->playerHeight);
-	sdl->playerAttLight = loadTexture(sdl->renderer, "./textures/player_att_light.bmp", &sdl->playerWidth, &sdl->playerHeight);
-	sdl->playerAttHeavy = loadTexture(sdl->renderer, "./textures/player_att_heavy.bmp", &sdl->playerWidth, &sdl->playerHeight);
-	sdl->playerJump = loadTexture(sdl->renderer, "./textures/player_jump.bmp", &sdl->playerWidth, &sdl->playerHeight);
 	sdl->enemyIdle = loadTexture(sdl->renderer, "./textures/enemy_idle.bmp", &sdl->enemyWidth, &sdl->enemyHeight);
 	sdl->background = loadTexture(sdl->renderer, "./textures/background.bmp", &sdl->bgWidth, &sdl->bgHeight);
 
@@ -447,27 +447,45 @@ bool loadAssets(SDLContext* sdl, GameState* state) {
 	state->player.textures.idle = loadTexture(sdl->renderer, "./textures/aminations/player_idle.bmp", &textureWidth, &textureHeight);
 	state->player.textures.idleFrames = textureWidth / PLAYER_WIDTH;
 
-	if(!sdl->playerAttHeavy || !sdl->playerAttLight || !sdl->playerIdle || !sdl->enemyIdle || !sdl->background || !state->player.textures.idle) {
+	state->player.textures.walk = loadTexture(sdl->renderer, "./textures/aminations/player_walk.bmp", &textureWidth, &textureHeight);
+	state->player.textures.walkFrames = textureWidth / PLAYER_WIDTH;
+
+	state->player.textures.attLight = loadTexture(sdl->renderer, "./textures/aminations/player_attack_light.bmp", &textureWidth, &textureHeight);
+	state->player.textures.attLightFrames = textureWidth / PLAYER_WIDTH;
+
+	state->player.textures.attHeavy = loadTexture(sdl->renderer, "./textures/aminations/player_attack_heavy.bmp", &textureWidth, &textureHeight);
+	state->player.textures.attHeavyFrames = textureWidth / PLAYER_WIDTH;
+
+	state->player.textures.jump = loadTexture(sdl->renderer, "./textures/aminations/player_jump.bmp", &textureWidth, &textureHeight);
+	state->player.textures.jumpFrames = textureWidth / PLAYER_WIDTH;
+
+	/*if(!sdl->playerAttHeavy || !sdl->playerAttLight || !sdl->playerIdle || !sdl->enemyIdle || !sdl->background 
+	|| !state->player.textures.idle || !state->player.textures.walk) {
 		return false;
-	}
+	}*/
 
 	return true;
 }
 
 // funkcja czyszcz¹ca miejsce po SDL
-void cleanup(SDLContext* sdl) {
+void cleanup(SDLContext* sdl, GameState* state) {
 	// Zwalnianie powierzchni (Surface)
 	if (sdl->charset) SDL_FreeSurface(sdl->charset);
 	if (sdl->screen)  SDL_FreeSurface(sdl->screen);
 
 	// Zwalnianie tekstur, renderera i okna
-	if (sdl->playerIdle)   SDL_DestroyTexture(sdl->playerIdle);
-	if (sdl->playerAttLight)   SDL_DestroyTexture(sdl->playerAttLight);
-	if (sdl->playerAttHeavy)   SDL_DestroyTexture(sdl->playerAttHeavy);
 	if (sdl->background)   SDL_DestroyTexture(sdl->background);
 	if (sdl->scrtex)   SDL_DestroyTexture(sdl->scrtex);
 	if (sdl->renderer) SDL_DestroyRenderer(sdl->renderer);
 	if (sdl->window)   SDL_DestroyWindow(sdl->window);
+	if (sdl->enemyIdle) SDL_DestroyTexture(sdl->enemyIdle);
+
+	// Zwalnianie tekstur gracza
+	if (state->player.textures.idle) SDL_DestroyTexture(state->player.textures.idle);
+	if (state->player.textures.walk) SDL_DestroyTexture(state->player.textures.walk);
+	if (state->player.textures.attLight) SDL_DestroyTexture(state->player.textures.attLight);
+	if (state->player.textures.attHeavy) SDL_DestroyTexture(state->player.textures.attHeavy);
+	if (state->player.textures.jump) SDL_DestroyTexture(state->player.textures.jump);
 
 	// Wy³¹czenie SDL
 	SDL_Quit();
@@ -602,11 +620,30 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 	);
 }
 
-void drawPlayer(SDL_Renderer* renderer, Player* player, Camera* camera, SDL_Texture* playerTex) {
-	SDL_Texture* textureToDraw = NULL;
+SDL_Rect getPlayerHurtbox(Player* player) {
+	SDL_Rect box;
+	box.x = player->x + HURTBOX_OFF_X;
+	box.y = player->y + HURTBOX_OFF_Y;
 
-	if (player->currentAction == ACTION_IDLE) textureToDraw = player->textures.idle;
-	if (textureToDraw == NULL) return;
+	box.w = HURTBOX_WIDTH;
+	box.h = HURTBOX_HEIGHT;
+
+	return box;
+}
+
+SDL_Texture* getCurrentPlayerTexture(Player* player) {
+	switch (player->currentAction) {
+	case ACTION_IDLE: return player->textures.idle;
+	case ACTION_LIGHT: return player->textures.attLight;
+	case ACTION_HEAVY: return player->textures.attHeavy;
+	case ACTION_JUMP: return player->textures.jump;
+	case ACTION_WALK: return player->textures.walk;
+	default: return player->textures.idle;
+	}
+}
+
+void drawPlayer(SDL_Renderer* renderer, Player* player, Camera* camera) {
+	SDL_Texture* textureToDraw = getCurrentPlayerTexture(player);
 
 	SDL_Rect srcRect;
 	srcRect.x = player->currentFrame * PLAYER_WIDTH;
@@ -616,7 +653,7 @@ void drawPlayer(SDL_Renderer* renderer, Player* player, Camera* camera, SDL_Text
 
 	SDL_Rect destRect;
 	destRect.x = player->x - camera->x;
-	destRect.y = player->y - camera->y;
+	destRect.y = player->y - camera->y - PLAYER_WIDTH;
 	destRect.w = PLAYER_WIDTH;
 	destRect.h = PLAYER_HEIGHT;
 
@@ -666,16 +703,19 @@ void drawHitboxes(SDLContext* sdl, GameState* state) {
 	Camera* cam = &state->camera;
 	Colors* col = &state->colors;
 
-	int px = state->player.x - cam->x;
-	int py = state->player.y - state->player.h - cam->y;
-	DrawRectangle(sdl->screen, px, py, state->player.w, state->player.h, col->green, -1);
+	// rysowanie hurtboxa playera
+	SDL_Rect playerBox = getPlayerHurtbox(&state->player);
+	int px = playerBox.x - cam->x;
+	int py = playerBox.y - state->player.h - cam->y;
+	DrawRectangle(sdl->screen, px, py, playerBox.w, playerBox.h, col->green, -1);
 
+	// Rysowanie hurtboxa enemy
 	int ex = state->enemy.x - cam->x;
 	int ey = state->enemy.y - cam->y;
 	DrawRectangle(sdl->screen, ex, ey, state->enemy.w, state->enemy.h, col->green, -1);
 
+	// Rysowanie hitboxa ataków
 	SDL_Rect attackBox = getAttackBox(&state->player);
-
 	if (attackBox.w > 0) {
 		DrawRectangle(sdl->screen,
 			attackBox.x - cam->x,
@@ -763,12 +803,12 @@ void resolveInputs(GameState* state) {
 			// co ma sie staæ w danym combo
 			if (strcmp(state->definedSeqences[i].name, "Triple hit") == 0) {
 				state->player.currentAction = ACTION_HEAVY;
-				state->player.actionTimer = 0.5;
+				state->player.actionTimer = TIME_ATTACK_HEAVY;
 				state->player.hasHit = false;
 			}
 			else if (strcmp(state->definedSeqences[i].name, "Jump") == 0) {
 				state->player.currentAction = ACTION_JUMP;
-				state->player.actionTimer = 0.8;
+				state->player.actionTimer = TIME_JUMP;
 				state->player.hasHit = false;
 			}
 			else if (strcmp(state->definedSeqences[i].name, "Dash Right") == 0) {
@@ -789,14 +829,14 @@ void resolveInputs(GameState* state) {
 		if (lastEvent->input == INPUT_ATTACK_LIGHT) {
 			if (state->player.currentAction != ACTION_HEAVY) {
 				state->player.currentAction = ACTION_LIGHT;
-				state->player.actionTimer = 0.2;
+				state->player.actionTimer = TIME_ATTACK_LIGHT;
 				state->player.hasHit = false;
 			}
 		}
 
 		if (lastEvent->input == INPUT_ATTACK_HEAVY) {
 			state->player.currentAction = ACTION_HEAVY;
-			state->player.actionTimer = 0.5;
+			state->player.actionTimer = TIME_ATTACK_HEAVY;
 			state->player.hasHit = false;
 		}
 	}
@@ -821,7 +861,7 @@ void updatePlayerAction(GameState* state) {
 		state->buffer.previousHeadIndex = state->buffer.headIndex;
 	}
 
-	if (state->player.currentAction != ACTION_IDLE) {
+	if (state->player.currentAction != ACTION_IDLE && state->player.currentAction != ACTION_WALK) {
 		state->player.actionTimer -= state->time.delta;
 
 		// Jeœli czas min¹³ koniec ataku
@@ -833,21 +873,35 @@ void updatePlayerAction(GameState* state) {
 }
 
 void movePlayer(Player* player, double delta, int end) {
+	// jak nie chodzi to powrót do idle
+	if (player->currentAction == ACTION_WALK) {
+		player->currentAction = ACTION_IDLE;
+	}
+
 	const Uint8* kaystate = SDL_GetKeyboardState(NULL);
-	if (kaystate[SDL_SCANCODE_W]) player->y -= (int)(player->speed * delta);
-	if (kaystate[SDL_SCANCODE_S]) player->y += (int)(player->speed * delta);
+	if (kaystate[SDL_SCANCODE_W]){
+		player->y -= (int)(player->speed * delta);
+		player->currentAction = ACTION_WALK;
+	}
+	if (kaystate[SDL_SCANCODE_S]) {
+		player->y += (int)(player->speed * delta);
+		player->currentAction = ACTION_WALK;
+	}
 	if (kaystate[SDL_SCANCODE_A]) {
 		player->x -= (int)(player->speed * delta);
+		player->currentAction = ACTION_WALK;
 		player->direction = LEFT;
 	}
 	if (kaystate[SDL_SCANCODE_D]) { 
 		player->x += (int)(player->speed * delta);
+		player->currentAction = ACTION_WALK;
 		player->direction = RIGHT;
 	};
 
+	// Blokada wyjœcia z góry
 	if (player->y < HORIZON_Y) {
 		player->y = HORIZON_Y;
-	}
+	} // Blokada wyjœcia z do³u
 	if (player->y > SCREEN_HEIGHT) {
 		player->y = SCREEN_HEIGHT;
 	}
@@ -855,8 +909,7 @@ void movePlayer(Player* player, double delta, int end) {
 	// Blokada wyjœcia z lewej strony
 	if (player->x < 0) {
 		player->x = 0;
-	}
-	// Blokada wyjœcia z prawej strony
+	}// Blokada wyjœcia z prawej strony
 	if (player->x > end - player->w) {
 		player->x = end - player->w;
 	}
@@ -879,19 +932,40 @@ void updateTime(Time *time) {
 }
 
 void updatePlayerAnimation(Player* player, double delta) {
-	const double frameDuration = .4;
-
+	int maxFrames = 0;
+	double frameDuration = 0.1;
+	switch (player->currentAction) {
+	case ACTION_IDLE:
+		maxFrames = player->textures.idleFrames;
+		frameDuration = ANIM_SPEED_IDLE;
+		break;
+	case ACTION_WALK:
+		maxFrames = player->textures.walkFrames;
+		frameDuration = ANIM_SPEED_WALK;
+		break;
+	case ACTION_LIGHT:
+		maxFrames = player->textures.attLightFrames;
+		if (maxFrames > 0) frameDuration = TIME_ATTACK_LIGHT / (double)maxFrames;
+		break;
+	case ACTION_HEAVY:
+		maxFrames = player->textures.attHeavyFrames;
+		if (maxFrames > 0) frameDuration = TIME_ATTACK_HEAVY / (double)maxFrames;
+		break;
+	case ACTION_JUMP:
+		maxFrames = player->textures.jumpFrames;
+		if (maxFrames > 0) frameDuration = TIME_JUMP / (double)maxFrames;
+		break;
+	default:
+		maxFrames = player->textures.idleFrames;
+		frameDuration = 0.1;
+		break;
+	}
+	if (maxFrames == 0) return;
 	player->animTimer += delta;
 
 	if (player->animTimer >= frameDuration) {
-		player->animTimer = 0.0;
+		player->animTimer -= frameDuration;
 		player->currentFrame++;
-
-		int maxFrames = 0;
-
-		if (player->currentAction == ACTION_IDLE) {
-			maxFrames = player->textures.idleFrames;
-		}
 
 		if (player->currentFrame >= maxFrames) {
 			player->currentFrame = 0;
@@ -925,21 +999,6 @@ void pushInput(Buffer* buffer, int inputCode) {
 	buffer->inputs[buffer->headIndex].input = inputCode;
 	buffer->inputs[buffer->headIndex].time = SDL_GetTicks();
 	buffer->headIndex = (buffer->headIndex + 1) % INPUT_BUFFER_SIZE;
-}
-
-SDL_Texture* getCurrentPlayerTexture(SDLContext* sdl, int currAction) {
-	switch (currAction) {
-		case ACTION_IDLE:
-			return sdl->playerIdle;
-		case ACTION_LIGHT:
-			return sdl->playerAttLight;
-		case ACTION_HEAVY:
-			return sdl->playerAttHeavy;
-		case ACTION_JUMP:
-			return sdl->playerJump;
-		default:
-			return sdl->playerIdle;
-	}
 }
 
 // obs³ugiwanie prostych zdarzeñ typu escape
@@ -994,8 +1053,7 @@ void render(GameState* state, SDLContext* sdl) {
 
 	drawEnemy(sdl->renderer, &state->enemy, &state->camera, sdl->enemyIdle);
 
-	SDL_Texture* currentPlayerTexture = getCurrentPlayerTexture(sdl, state->player.currentAction);
-	drawPlayer(sdl->renderer, &state->player, &state->camera, currentPlayerTexture);
+	drawPlayer(sdl->renderer, &state->player, &state->camera);
 
 	drawHitboxes(sdl, state);
 	drawInfo(sdl, state);
@@ -1020,13 +1078,13 @@ int main(int argc, char **argv) {
 
 	// inicjalizacja biblioteki SDL
 	if (!initSDL(&sdl)) {
-		cleanup(&sdl);
+		cleanup(&sdl, &state);
 		return 1;
 	}
 
 	// pobieranie zasobów
 	if (!loadAssets(&sdl, &state)) {
-		cleanup(&sdl);
+		cleanup(&sdl, &state);
 		return 1;
 	}
 
@@ -1040,6 +1098,6 @@ int main(int argc, char **argv) {
 		render(&state, &sdl);
 	};
 
-	cleanup(&sdl);
+	cleanup(&sdl, &state);
 	return 0;
 };
