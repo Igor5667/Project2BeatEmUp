@@ -603,14 +603,29 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 }
 
 void drawPlayer(SDL_Renderer* renderer, Player* player, Camera* camera, SDL_Texture* playerTex) {
-	SDL_Rect destRect;
-	destRect.x = (int)(player->x - camera->x);
-	destRect.y = (int)(player->y - camera->y) - player->h;
-	destRect.w = player->w;
-	destRect.h = player->h;
+	SDL_Texture* textureToDraw = NULL;
 
-	SDL_RendererFlip flip = (player->direction == LEFT) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
-	SDL_RenderCopyEx(renderer, playerTex, NULL, &destRect, 0.0, NULL, flip);
+	if (player->currentAction == ACTION_IDLE) textureToDraw = player->textures.idle;
+	if (textureToDraw == NULL) return;
+
+	SDL_Rect srcRect;
+	srcRect.x = player->currentFrame * PLAYER_WIDTH;
+	srcRect.y = 0;
+	srcRect.w = PLAYER_WIDTH;
+	srcRect.h = PLAYER_HEIGHT;
+
+	SDL_Rect destRect;
+	destRect.x = player->x - camera->x;
+	destRect.y = player->y - camera->y;
+	destRect.w = PLAYER_WIDTH;
+	destRect.h = PLAYER_HEIGHT;
+
+	SDL_RendererFlip flip = SDL_FLIP_NONE;
+	if (player->direction == LEFT) {
+		flip = SDL_FLIP_HORIZONTAL;
+	}
+
+	SDL_RenderCopyEx(renderer, textureToDraw, &srcRect, &destRect, 0, NULL, flip);
 }
 
 void drawDebugOverlay(SDLContext* sdl, GameState* state) {
@@ -863,6 +878,27 @@ void updateTime(Time *time) {
 	time->frames++;
 }
 
+void updatePlayerAnimation(Player* player, double delta) {
+	const double frameDuration = .4;
+
+	player->animTimer += delta;
+
+	if (player->animTimer >= frameDuration) {
+		player->animTimer = 0.0;
+		player->currentFrame++;
+
+		int maxFrames = 0;
+
+		if (player->currentAction == ACTION_IDLE) {
+			maxFrames = player->textures.idleFrames;
+		}
+
+		if (player->currentFrame >= maxFrames) {
+			player->currentFrame = 0;
+		}
+	}
+}
+
 void updateCamera(GameState* state, int mapWidth) {
 	// gdy gracz jest przy prawej krawêdzi ekranu to ruch kamer¹
 	if ((state->player.x + state->player.w) > state->camera.x + SCREEN_WIDTH - CAMERA_MARGIN) {
@@ -944,6 +980,7 @@ void updateGame(GameState* state, SDLContext* sdl) {
 	updatePlayerAction(state);
 	updateTime(&state->time);
 	movePlayer(&state->player, state->time.delta, sdl->bgWidth);
+	updatePlayerAnimation(&state->player, state->time.delta);
 	updateCamera(state, sdl->bgWidth);
 	handleAttacks(state);
 	updateScoreLogic(&state->score, state->time.delta);
