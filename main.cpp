@@ -21,6 +21,8 @@ extern "C" {
 // player
 #define PLAYER_START_X_POS 45
 #define PLAYER_SPEED 500.0 // pixele na sekundê
+#define PLAYER_WIDTH 128
+#define PLAYER_HEIGHT 128
 // directions
 #define LEFT 1
 #define RIGHT 0
@@ -77,6 +79,21 @@ struct InputEvenet {
 	Uint32 time;
 };
 
+struct PlayerTextures {
+	SDL_Texture* idle;
+	int idleFrames;
+	SDL_Texture* attLight;
+	int attLightFrames;
+	SDL_Texture* attHeavy;
+	int attHeavyFrames;
+	SDL_Texture* jump;
+	int jumpFrames;
+	SDL_Texture* dash;
+	int dashFrames;
+	SDL_Texture* walk;
+	int walkFrames;
+};
+
 struct Player {
 	int x;
 	int y;
@@ -87,6 +104,10 @@ struct Player {
 	int currentAction;   // Przechowuje stan (IDLE, LIGHT, HEAVY)
 	double actionTimer;
 	bool hasHit;
+
+	PlayerTextures textures;
+	int currentFrame;
+	double animTimer;
 };
 
 struct Enemy {
@@ -130,7 +151,7 @@ struct Buffer {
 
 struct Score {
 	int points;
-	int comboCounter;
+	double comboMultipler;
 	double comboTimer;
 };
 
@@ -259,14 +280,17 @@ InputEvenet* getInputBack(Buffer* buffer, int stepsBack) {
 //=================================
 
 void initPlayer(Player* player, int w, int h) {
-	player->w = w;
-	player->h = h;
+	player->w = PLAYER_WIDTH;
+	player->h = PLAYER_HEIGHT;
 	player->x = SCREEN_WIDTH / 2;
 	player->y = SCREEN_HEIGHT / 2;
 	player->speed = PLAYER_SPEED;
 	player->direction = RIGHT;
 	player->currentAction = ACTION_IDLE;
 	player->actionTimer = 0.0;
+	player->hasHit = false;
+	player->currentFrame = 0;
+	player->animTimer = 0.0;
 }
 
 void initEnemy(Enemy* enemy, int w, int h) {
@@ -348,7 +372,7 @@ void initSequences(GameState* state) {
 
 void initScore(Score* score) {
 	score->points = 0;
-	score->comboCounter = 0;
+	score->comboMultipler = 1;
 	score->comboTimer = 0.0;
 }
 
@@ -402,7 +426,7 @@ bool initSDL(SDLContext* sdl) {
 }
 
 // funkcja ³aduj¹ca zasoby (obrazy, czcionki, itp)
-bool loadAssets(SDLContext* sdl) {
+bool loadAssets(SDLContext* sdl, GameState* state) {
 	// wczytanie czcionki cs8x8.bmp
 	sdl->charset = SDL_LoadBMP("./textures/cs8x8.bmp");
 	if (sdl->charset == NULL) {
@@ -419,7 +443,11 @@ bool loadAssets(SDLContext* sdl) {
 	sdl->enemyIdle = loadTexture(sdl->renderer, "./textures/enemy_idle.bmp", &sdl->enemyWidth, &sdl->enemyHeight);
 	sdl->background = loadTexture(sdl->renderer, "./textures/background.bmp", &sdl->bgWidth, &sdl->bgHeight);
 
-	if(!sdl->playerAttHeavy || !sdl->playerAttLight || !sdl->playerIdle || !sdl->enemyIdle || !sdl->background ) {
+	int textureWidth, textureHeight;
+	state->player.textures.idle = loadTexture(sdl->renderer, "./textures/aminations/player_idle.bmp", &textureWidth, &textureHeight);
+	state->player.textures.idleFrames = textureWidth / PLAYER_WIDTH;
+
+	if(!sdl->playerAttHeavy || !sdl->playerAttLight || !sdl->playerIdle || !sdl->enemyIdle || !sdl->background || !state->player.textures.idle) {
 		return false;
 	}
 
@@ -565,7 +593,7 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 		sdl->charset
 	);
 
-	sprintf(text, "Uzyskane punkty: %d", state->score.points);
+	sprintf(text, "Uzyskane punkty: %d   Mnoznik combo: %.1lf", state->score.points, state->score.comboMultipler);
 	DrawString(sdl->screen,
 		sdl->screen->w / 2 - (strlen(text) * CHAR_WIDTH) / 2,
 		INFO_LINE_3_Y,
@@ -673,6 +701,10 @@ void handleAttacks(GameState* state) {
 		state->player.hasHit = true;
 		state->enemy.hitTimer = 0.2;
 
+		state->score.comboTimer = 2.0;
+		state->score.points += attacksData[state->player.currentAction].damage * state->score.comboMultipler;
+		state->score.comboMultipler += 0.4;
+
 		if (state->buffer.showDebug) {
 			printf("HIT! Action ID: %d\n", state->player.currentAction);
 		}
@@ -736,20 +768,35 @@ void resolveInputs(GameState* state) {
 		}
 	}
 
-	// sprawdzanie podjedyñczych klikniêæ
-	InputEvenet* lastEvent = getInputBack(&state->buffer, 0);
-	if (lastEvent->input == INPUT_ATTACK_LIGHT) {
-		if (state->player.currentAction != ACTION_HEAVY) {
-			state->player.currentAction = ACTION_LIGHT;
-			state->player.actionTimer = 0.2;
+	if (state->player.currentAction == ACTION_IDLE) {
+		// sprawdzanie podjedyñczych klikniêæ
+		InputEvenet* lastEvent = getInputBack(&state->buffer, 0);
+		if (lastEvent->input == INPUT_ATTACK_LIGHT) {
+			if (state->player.currentAction != ACTION_HEAVY) {
+				state->player.currentAction = ACTION_LIGHT;
+				state->player.actionTimer = 0.2;
+				state->player.hasHit = false;
+			}
+		}
+
+		if (lastEvent->input == INPUT_ATTACK_HEAVY) {
+			state->player.currentAction = ACTION_HEAVY;
+			state->player.actionTimer = 0.5;
 			state->player.hasHit = false;
 		}
 	}
+}
 
-	if (lastEvent->input == INPUT_ATTACK_HEAVY) {
-		state->player.currentAction = ACTION_HEAVY;
-		state->player.actionTimer = 0.5;
-		state->player.hasHit = false;
+void updateScoreLogic(Score* score, double delta) {
+	// ograniczenie combo
+	if (score->comboMultipler > 5) {
+		score->comboMultipler = 5;
+	}
+
+	if(score->comboTimer > 0) {
+		score->comboTimer -= delta;
+	} else {
+		score->comboMultipler = 1.0;
 	}
 }
 
@@ -899,6 +946,7 @@ void updateGame(GameState* state, SDLContext* sdl) {
 	movePlayer(&state->player, state->time.delta, sdl->bgWidth);
 	updateCamera(state, sdl->bgWidth);
 	handleAttacks(state);
+	updateScoreLogic(&state->score, state->time.delta);
 }
 
 void render(GameState* state, SDLContext* sdl) {
@@ -940,7 +988,7 @@ int main(int argc, char **argv) {
 	}
 
 	// pobieranie zasobów
-	if (!loadAssets(&sdl)) {
+	if (!loadAssets(&sdl, &state)) {
 		cleanup(&sdl);
 		return 1;
 	}
