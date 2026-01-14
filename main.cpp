@@ -20,19 +20,21 @@ extern "C" {
 #define FPS_REFRESH 0.5
 // player
 #define PLAYER_START_X_POS 45
-#define PLAYER_SPEED 400.0 // pixele na sekundê
+#define PLAYER_SPEED 350.0 // pixele na sekundê
+#define DASH_SPEED 700.0
 #define PLAYER_WIDTH 128
 #define PLAYER_HEIGHT 128
-#define HURTBOX_WIDTH 68
+#define HURTBOX_WIDTH 50
 #define HURTBOX_HEIGHT 98
-#define HURTBOX_OFF_X 30
-#define HURTBOX_OFF_Y 30
-// predkoœci animacji
+#define HURTBOX_OFF_X 39
+#define HURTBOX_OFF_Y 39
+// predkoœci akcji
 #define ANIM_SPEED_WALK 0.1
 #define ANIM_SPEED_IDLE 0.35
 #define TIME_ATTACK_LIGHT 0.3
-#define TIME_ATTACK_HEAVY 0.7
-#define TIME_JUMP 1
+#define TIME_ATTACK_HEAVY 0.8
+#define TIME_JUMP 1.0
+#define TIME_DASH 0.3
 // directions
 #define LEFT 1
 #define RIGHT 0
@@ -42,6 +44,7 @@ extern "C" {
 #define ACTION_HEAVY 2
 #define ACTION_JUMP 3
 #define ACTION_WALK 4
+#define ACTION_DASH 5
 // buffer
 #define INPUT_BUFFER_SIZE 5
 #define MAX_SEQ_LEN 10
@@ -204,6 +207,8 @@ const char* actionNames[] = {
 	"LIGHT",    // 1
 	"HEAVY"     // 2
 	"JUMP"      // 3
+	"WALK"      // 4
+	"DASH"      // 5
 };
 const char* inputNames[] = {
 	"...",      // INPUT_NONE
@@ -459,10 +464,13 @@ bool loadAssets(SDLContext* sdl, GameState* state) {
 	state->player.textures.jump = loadTexture(sdl->renderer, "./textures/aminations/player_jump.bmp", &textureWidth, &textureHeight);
 	state->player.textures.jumpFrames = textureWidth / PLAYER_WIDTH;
 
-	/*if(!sdl->playerAttHeavy || !sdl->playerAttLight || !sdl->playerIdle || !sdl->enemyIdle || !sdl->background 
-	|| !state->player.textures.idle || !state->player.textures.walk) {
+	state->player.textures.dash = loadTexture(sdl->renderer, "./textures/aminations/player_dash.bmp", &textureWidth, &textureHeight);
+	state->player.textures.dashFrames = textureWidth / PLAYER_WIDTH;
+
+	if(!sdl->background || !state->player.textures.idle || !state->player.textures.walk || !state->player.textures.attLight 
+	|| !state->player.textures.attHeavy || !state->player.textures.jump) {
 		return false;
-	}*/
+	}
 
 	return true;
 }
@@ -638,6 +646,7 @@ SDL_Texture* getCurrentPlayerTexture(Player* player) {
 	case ACTION_HEAVY: return player->textures.attHeavy;
 	case ACTION_JUMP: return player->textures.jump;
 	case ACTION_WALK: return player->textures.walk;
+	case ACTION_DASH: return player->textures.dash;
 	default: return player->textures.idle;
 	}
 }
@@ -730,6 +739,19 @@ void drawHitboxes(SDLContext* sdl, GameState* state) {
 //       FUNCKCJE LOGIC
 //=================================
 
+void startAction(Player* player, int action, double duration) {
+	// Ustawiamy now¹ akcjê i czas jej trwania
+	player->currentAction = action;
+	player->actionTimer = duration;
+
+	// KLUCZOWE: Resetujemy animacjê do pocz¹tku!
+	player->currentFrame = 0;
+	player->animTimer = 0.0;
+
+	// Resetujemy flagê trafienia (wa¿ne dla ataków)
+	player->hasHit = false;
+}
+
 bool checkRectCollision(SDL_Rect a, SDL_Rect b) {
 	if (a.x + a.w < b.x) return false;
 	if (a.x > b.x + b.w) return false;
@@ -802,42 +824,34 @@ void resolveInputs(GameState* state) {
 
 			// co ma sie staæ w danym combo
 			if (strcmp(state->definedSeqences[i].name, "Triple hit") == 0) {
-				state->player.currentAction = ACTION_HEAVY;
-				state->player.actionTimer = TIME_ATTACK_HEAVY;
-				state->player.hasHit = false;
+				startAction(&state->player, ACTION_HEAVY, TIME_ATTACK_HEAVY);
 			}
 			else if (strcmp(state->definedSeqences[i].name, "Jump") == 0) {
-				state->player.currentAction = ACTION_JUMP;
-				state->player.actionTimer = TIME_JUMP;
-				state->player.hasHit = false;
+				startAction(&state->player, ACTION_JUMP, TIME_JUMP);
 			}
 			else if (strcmp(state->definedSeqences[i].name, "Dash Right") == 0) {
-				state->player.x += 100;
-				state->player.hasHit = false;
+				startAction(&state->player, ACTION_DASH, TIME_DASH);
+				state->player.direction = RIGHT;
 			}
 			else if (strcmp(state->definedSeqences[i].name, "Dash Left") == 0) {
-				state->player.x -= 100;
+				startAction(&state->player, ACTION_DASH, TIME_DASH);
+				state->player.direction = LEFT;
 			}
 
 			return;
 		}
 	}
 
+	// sprawdzanie podjedyñczych klikniêæ tykji w idle
 	if (state->player.currentAction == ACTION_IDLE) {
-		// sprawdzanie podjedyñczych klikniêæ
 		InputEvenet* lastEvent = getInputBack(&state->buffer, 0);
+
 		if (lastEvent->input == INPUT_ATTACK_LIGHT) {
-			if (state->player.currentAction != ACTION_HEAVY) {
-				state->player.currentAction = ACTION_LIGHT;
-				state->player.actionTimer = TIME_ATTACK_LIGHT;
-				state->player.hasHit = false;
-			}
+			startAction(&state->player, ACTION_LIGHT, TIME_ATTACK_LIGHT);
 		}
 
 		if (lastEvent->input == INPUT_ATTACK_HEAVY) {
-			state->player.currentAction = ACTION_HEAVY;
-			state->player.actionTimer = TIME_ATTACK_HEAVY;
-			state->player.hasHit = false;
+			startAction(&state->player, ACTION_HEAVY, TIME_ATTACK_HEAVY);
 		}
 	}
 }
@@ -873,30 +887,41 @@ void updatePlayerAction(GameState* state) {
 }
 
 void movePlayer(Player* player, double delta, int end) {
-	// jak nie chodzi to powrót do idle
-	if (player->currentAction == ACTION_WALK) {
-		player->currentAction = ACTION_IDLE;
-	}
+	// obs³uga dasha
+	if (player->currentAction == ACTION_DASH) {
+		if (player->direction == RIGHT) {
+			player->x += (int)(DASH_SPEED * delta);
+		}
+		else {
+			player->x -= (int)(DASH_SPEED * delta);
+		}
+	}// je¿eli dashuje to nie da siê sterowaæ
+	else {
+		// jak nie chodzi to powrót do idle
+		if (player->currentAction == ACTION_WALK) {
+			player->currentAction = ACTION_IDLE;
+		}
 
-	const Uint8* kaystate = SDL_GetKeyboardState(NULL);
-	if (kaystate[SDL_SCANCODE_W]){
-		player->y -= (int)(player->speed * delta);
-		player->currentAction = ACTION_WALK;
+		const Uint8* kaystate = SDL_GetKeyboardState(NULL);
+		if (kaystate[SDL_SCANCODE_W]){
+			player->y -= (int)(player->speed * delta);
+			player->currentAction = ACTION_WALK;
+		}
+		if (kaystate[SDL_SCANCODE_S]) {
+			player->y += (int)(player->speed * delta);
+			player->currentAction = ACTION_WALK;
+		}
+		if (kaystate[SDL_SCANCODE_A]) {
+			player->x -= (int)(player->speed * delta);
+			player->currentAction = ACTION_WALK;
+			player->direction = LEFT;
+		}
+		if (kaystate[SDL_SCANCODE_D]) { 
+			player->x += (int)(player->speed * delta);
+			player->currentAction = ACTION_WALK;
+			player->direction = RIGHT;
+		};
 	}
-	if (kaystate[SDL_SCANCODE_S]) {
-		player->y += (int)(player->speed * delta);
-		player->currentAction = ACTION_WALK;
-	}
-	if (kaystate[SDL_SCANCODE_A]) {
-		player->x -= (int)(player->speed * delta);
-		player->currentAction = ACTION_WALK;
-		player->direction = LEFT;
-	}
-	if (kaystate[SDL_SCANCODE_D]) { 
-		player->x += (int)(player->speed * delta);
-		player->currentAction = ACTION_WALK;
-		player->direction = RIGHT;
-	};
 
 	// Blokada wyjœcia z góry
 	if (player->y < HORIZON_Y) {
@@ -907,11 +932,11 @@ void movePlayer(Player* player, double delta, int end) {
 	}
 
 	// Blokada wyjœcia z lewej strony
-	if (player->x < 0) {
-		player->x = 0;
+	if (player->x < 0 - HURTBOX_OFF_X) {
+		player->x = 0 - HURTBOX_OFF_X;
 	}// Blokada wyjœcia z prawej strony
-	if (player->x > end - player->w) {
-		player->x = end - player->w;
+	if (player->x > end - player->w + HURTBOX_OFF_X) {
+		player->x = end - player->w + HURTBOX_OFF_X;
 	}
 }
 
@@ -954,6 +979,10 @@ void updatePlayerAnimation(Player* player, double delta) {
 	case ACTION_JUMP:
 		maxFrames = player->textures.jumpFrames;
 		if (maxFrames > 0) frameDuration = TIME_JUMP / (double)maxFrames;
+		break;
+	case ACTION_DASH:
+		maxFrames = player->textures.dashFrames;
+		if (maxFrames > 0) frameDuration = TIME_DASH / (double)maxFrames;
 		break;
 	default:
 		maxFrames = player->textures.idleFrames;
