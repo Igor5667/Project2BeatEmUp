@@ -42,6 +42,7 @@ extern "C" {
 #define TIME_ATTACK_HEAVY 0.8
 #define TIME_JUMP 1.0
 #define TIME_DASH 0.3
+#define TIME_HURT 0.5
 // directions
 #define LEFT 1
 #define RIGHT 0
@@ -52,6 +53,7 @@ extern "C" {
 #define ACTION_JUMP 3
 #define ACTION_WALK 4
 #define ACTION_DASH 5
+#define ACTION_HURT 6
 // buffer
 #define INPUT_BUFFER_SIZE 5
 #define MAX_SEQ_LEN 10
@@ -113,6 +115,8 @@ struct PlayerTextures {
 	int dashFrames;
 	SDL_Texture* walk;
 	int walkFrames;
+	SDL_Texture* hurt;
+	int hurtFrames;
 };
 
 struct Entity {
@@ -223,6 +227,7 @@ const char* actionNames[] = {
 	"JUMP"      // 3
 	"WALK"      // 4
 	"DASH"      // 5
+	"HURT"      // 6
 };
 const char* inputNames[] = {
 	"...",      // INPUT_NONE
@@ -237,10 +242,13 @@ const char* inputNames[] = {
 
 // dane do hitboxów ataków
 const AttackData attacksData[] = {
-	{ 0, 0, 0, 0, false },     // ACTION_IDLE
-	{ 60, 50, 60, 10, true },  // ACTION_LIGHT
-	{ 120, 60, 70, 20, true },  // ACTION_HEAVY
-	{ 60, 90, 120, 15, true }   // ACTION_JUMP
+	{ 0, 0, 0, 0, false },		// 0 ACTION_IDLE
+	{ 60, 50, 60, 10, true },	// 1 ACTION_LIGHT
+	{ 120, 60, 70, 20, true },  // 2 ACTION_HEAVY
+	{ 60, 90, 120, 15, true },	// 3 ACTION_JUMP
+	{ 0, 0, 0, 0, false },		// 4 ACTION_WALK
+	{ 0, 0, 0, 0, false },		// 5 ACTION_DASH
+	{ 0, 0, 0, 0, false }		// 6 ACTION_HURT
 };
 
 
@@ -315,7 +323,7 @@ bool checkRectCollision(SDL_Rect a, SDL_Rect b) {
 	return true;
 }
 
-// funkcja zwracaj¹ca odpowiedni¹ teksturê gracza odpowiedni¹ do akcji któr¹ w³aœnie wykonuje
+// funkcja zwracaj¹ca odpowiedni¹ teksturê gracza, odpowiedni¹ do akcji któr¹ w³aœnie wykonuje
 SDL_Texture* getCurrentPlayerTexture(Player* player) {
 	switch (player->currentAction) {
 	case ACTION_IDLE: return player->textures.idle;
@@ -324,6 +332,7 @@ SDL_Texture* getCurrentPlayerTexture(Player* player) {
 	case ACTION_JUMP: return player->textures.jump;
 	case ACTION_WALK: return player->textures.walk;
 	case ACTION_DASH: return player->textures.dash;
+	case ACTION_HURT: return player->textures.hurt;
 	default: return player->textures.idle;
 	}
 }
@@ -541,15 +550,18 @@ bool loadAssets(SDLContext* sdl, GameState* state) {
 	state->player.textures.dash = loadTexture(sdl->renderer, "./textures/aminations/player_dash.bmp", &textureWidth, &textureHeight);
 	state->player.textures.dashFrames = textureWidth / PLAYER_WIDTH;
 
+	state->player.textures.hurt = loadTexture(sdl->renderer, "./textures/aminations/player_hurt.bmp", &textureWidth, &textureHeight);
+	state->player.textures.hurtFrames = textureWidth / PLAYER_WIDTH;
+
 	if(!sdl->background || !state->player.textures.idle || !state->player.textures.walk || !state->player.textures.attLight 
-	|| !state->player.textures.attHeavy || !state->player.textures.jump) {
+	|| !state->player.textures.attHeavy || !state->player.textures.jump || !state->player.textures.hurt) {
 		return false;
 	}
 
 	return true;
 }
 
-// funkcja czyszcz¹ca miejsce po SDL
+// funkcja czyszcz¹ca miejsce po SDL teksturach, renderze, powierzchniach itd
 void cleanup(SDLContext* sdl, GameState* state) {
 	// Zwalnianie powierzchni (Surface)
 	if (sdl->charset) SDL_FreeSurface(sdl->charset);
@@ -568,6 +580,7 @@ void cleanup(SDLContext* sdl, GameState* state) {
 	if (state->player.textures.attLight) SDL_DestroyTexture(state->player.textures.attLight);
 	if (state->player.textures.attHeavy) SDL_DestroyTexture(state->player.textures.attHeavy);
 	if (state->player.textures.jump) SDL_DestroyTexture(state->player.textures.jump);
+	if (state->player.textures.hurt) SDL_DestroyTexture(state->player.textures.hurt);
 
 	// Wy³¹czenie SDL
 	SDL_Quit();
@@ -777,9 +790,18 @@ void drawPlayer(SDL_Renderer* renderer, Player* player, Camera* camera) {
 		flip = SDL_FLIP_HORIZONTAL;
 	}
 
+	// na czerwono je¿êli hurt
+	if (player->currentAction == ACTION_HURT) {
+		SDL_SetTextureColorMod(textureToDraw, 255, 0, 0);
+	}
+
 	SDL_RenderCopyEx(renderer, textureToDraw, &srcRect, &destRect, 0, NULL, flip);
+
+	// powrót do normalnego koloru
+	if (player->currentAction == ACTION_HURT) SDL_SetTextureColorMod(textureToDraw, 255, 255, 255);
 }
 
+// rysowanie na dole ekranu bufora i aktualnej akcji (tryb debug)
 void drawDebugOverlay(SDLContext* sdl, GameState* state) {
 	if (state->buffer.showDebug) {
 		char text[512];
@@ -907,6 +929,8 @@ void handleAttacks(GameState* state) {
 	// czy enemy uderzy³ playera
 	if (checkRectCollision(enemyAttackBox, playerHurtBox) && !state->enemy.hasHit) {
 		state->enemy.hasHit = true;
+		startAction(&state->player, ACTION_HURT, TIME_HURT);
+
 		if (state->buffer.showDebug) {
 			printf("PLAYER HIT BY ENEMY! Action ID: %d\n", state->enemy.currentAction);
 		}
@@ -942,6 +966,8 @@ bool checkSequence(Buffer* buffer, Sequence* sequence) {
 
 // funkcja wykonuj¹ca akcjê w odniesieniu do wprowadzonych inputów
 void resolveInputs(GameState* state) {
+	// je¿eli jest uderzony to nie mo¿e wykonywaæ akcji (stun)
+	if (state->player.currentAction == ACTION_HURT) return;
 	// sprawdzanie combosów
 	for (int i = 0; i < state->sequencesCount; i++) {
 		if (checkSequence(&state->buffer, &state->definedSeqences[i])) {
@@ -1019,6 +1045,8 @@ void updatePlayerAction(GameState* state) {
 // funkcja obs³uguj¹ca ruch gracza. Odbiera klikniêcia i przytrzymania 
 // klawiszy WSAD i zmienia pozycjê x,y gracza
 void movePlayer(Player* player, double delta, int end) {
+	// je¿eli jest uderzony to ma stun (nie mo¿e siê ruszaæ)
+	if (player->currentAction == ACTION_HURT) return;
 	// obs³uga dasha
 	if (player->currentAction == ACTION_DASH) {
 		if (player->direction == RIGHT) {
@@ -1090,6 +1118,7 @@ void updateTime(Time *time) {
 	time->frames++;
 }
 
+// funkcja aktualizuj¹ca animacjê gracza w zale¿noœci od jego akcji
 void updatePlayerAnimation(Player* player, double delta) {
 	int maxFrames = 0;
 	double frameDuration = 0.1;
@@ -1117,6 +1146,10 @@ void updatePlayerAnimation(Player* player, double delta) {
 	case ACTION_DASH:
 		maxFrames = player->textures.dashFrames;
 		if (maxFrames > 0) frameDuration = TIME_DASH / (double)maxFrames;
+		break;
+	case ACTION_HURT:
+		maxFrames = player->textures.hurtFrames;
+		if (maxFrames > 0) frameDuration = TIME_HURT / (double)maxFrames;
 		break;
 	default:
 		maxFrames = player->textures.idleFrames;
