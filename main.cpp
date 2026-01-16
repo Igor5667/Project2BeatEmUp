@@ -122,6 +122,7 @@ struct Entity {
 	int currentAction;
 	double actionTimer;
 	bool hasHit;
+	double hitTimer;
 };
 
 struct Player: Entity {
@@ -132,7 +133,6 @@ struct Player: Entity {
 };
 
 struct Enemy: Entity {
-	double hitTimer;
 	double attackCooldown;
 	SDL_Texture* idle;
 	SDL_Texture* attLight;
@@ -248,6 +248,8 @@ const AttackData attacksData[] = {
 //       FUNKCJE POMOCNICZE
 //=================================
 
+// funkcja ³aduj¹ca dan¹ teksturê z pliku BMP pobieraj¹ca œcie¿kê i ustawiaj¹ca szerokoœæ i wysokoœæ
+// pod podane adresy (outW, outH). Zwraca wskaŸnik do tekstury lub NULL w przypadku b³êdu.
 SDL_Texture* loadTexture(SDL_Renderer* renderer, const char* path, int* outW, int* outH) {
 	SDL_Surface* surface = SDL_LoadBMP(path);
 	if (!surface) {
@@ -267,6 +269,7 @@ SDL_Texture* loadTexture(SDL_Renderer* renderer, const char* path, int* outW, in
 	return texture;
 }
 
+// funkcja zwracaj¹ca prostok¹t hitboxa ataku w której siê znajduje dana postaæ
 SDL_Rect getHitBox(Entity* entity) {
 	SDL_Rect box = { 0, 0, 0, 0 };
 
@@ -291,6 +294,7 @@ SDL_Rect getHitBox(Entity* entity) {
 	return box;
 }
 
+// funkcja zwracaj¹ca prostok¹t hurtboxa danej postaci
 SDL_Rect getHurtbox(Entity* entity) {
 	SDL_Rect box;
 	box.x = entity->x + HURTBOX_OFF_X;
@@ -302,6 +306,7 @@ SDL_Rect getHurtbox(Entity* entity) {
 	return box;
 }
 
+// funkcja sprawdzaj¹ca czy dwa prostok¹ty nachodz¹ na siebie
 bool checkRectCollision(SDL_Rect a, SDL_Rect b) {
 	if (a.x + a.w < b.x) return false;
 	if (a.x > b.x + b.w) return false;
@@ -310,6 +315,7 @@ bool checkRectCollision(SDL_Rect a, SDL_Rect b) {
 	return true;
 }
 
+// funkcja zwracaj¹ca odpowiedni¹ teksturê gracza odpowiedni¹ do akcji któr¹ w³aœnie wykonuje
 SDL_Texture* getCurrentPlayerTexture(Player* player) {
 	switch (player->currentAction) {
 	case ACTION_IDLE: return player->textures.idle;
@@ -333,6 +339,7 @@ InputEvenet* getInputBack(Buffer* buffer, int stepsBack) {
 //       FUNCKCJE SETUP
 //=================================
 
+// inicjalizacja gracza
 void initPlayer(Player* player) {
 	player->w = PLAYER_WIDTH;
 	player->h = PLAYER_HEIGHT;
@@ -347,6 +354,7 @@ void initPlayer(Player* player) {
 	player->animTimer = 0.0;
 }
 
+// inicjalizacja wroga
 void initEnemy(Enemy* enemy) {
 	enemy->x = ENEMY_POS_X;
 	enemy->y = ENEMY_POS_Y;
@@ -360,6 +368,7 @@ void initEnemy(Enemy* enemy) {
 	enemy->hitTimer = 0.0;
 }
 
+// inicjalizacja pozycji i wielkoœci kamery
 void initCamera(Camera* camera) {
 	camera->x = 0;
 	camera->y = 0;
@@ -367,6 +376,7 @@ void initCamera(Camera* camera) {
 	camera->h = SCREEN_HEIGHT;
 }
 
+// inicjalizacja zmiennych czasu
 void initTime(Time* time) {
 	time->worldTime = 0;
 	time->t1 = SDL_GetTicks();
@@ -375,6 +385,7 @@ void initTime(Time* time) {
 	time->fps = 0;
 }
 
+// inicjalizacja kolorów
 void initColors(Colors* colors, const SDL_PixelFormat* format) {
 	colors->black = SDL_MapRGB(format, 0xFF, 0xFF, 0xFF);
 	colors->black = SDL_MapRGB(format, 0x00, 0x00, 0x00);
@@ -392,6 +403,7 @@ void initColors(Colors* colors, const SDL_PixelFormat* format) {
 	colors->combo5 = SDL_MapRGB(format, 100, 0, 0);
 }
 
+// inicjalizacja bufora wprowadzanych akcji
 void initBuffer(Buffer* buffer) {
 	buffer->headIndex = 0;
 	buffer->previousHeadIndex = 0;
@@ -403,6 +415,7 @@ void initBuffer(Buffer* buffer) {
 	}
 }
 
+// inicjalizacja sekwencji combo
 void initSequences(GameState* state) {
 	state->sequencesCount = 0;
 
@@ -438,6 +451,7 @@ void initSequences(GameState* state) {
 	s4->maxTimeGap = 200;
 }
 
+// inicjalizacja zmiennych odnoœnie wyniku i combo
 void initScore(Score* score) {
 	score->points = 0;
 	score->comboMultipler = 1;
@@ -659,6 +673,7 @@ void drawScene(SDL_Renderer* renderer, SDL_Texture* background, Camera* camera) 
 	//SDL_BlitSurface(background, &dest, screen, NULL);
 }
 
+// funkcja rysuj¹ca info na górze ekranu (o czasie gry, fps, punkty, itp)
 void drawInfo(SDLContext* sdl, GameState* state) {
 	char text[INFO_TEXT_BUFFER_SIZE];
 
@@ -705,6 +720,8 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 	);
 }
 
+// funkcja frysuj¹ca mno¿nik combo wyœwietlany na dole ekranu
+// zwiêksza siê i drga gdy mno¿nik wzrasta
 void drawComboMultiplier(SDLContext* sdl, GameState* state) {
 	if (state->score.comboMultipler <= 1.0) return;
 
@@ -739,6 +756,7 @@ void drawComboMultiplier(SDLContext* sdl, GameState* state) {
 	DrawString(sdl->screen, x, y, text, sdl->charset, scale, drawColor);
 }
 
+// funkcja rysuj¹ca gracza w odniesieniu do kamery
 void drawPlayer(SDL_Renderer* renderer, Player* player, Camera* camera) {
 	SDL_Texture* textureToDraw = getCurrentPlayerTexture(player);
 
@@ -778,6 +796,7 @@ void drawDebugOverlay(SDLContext* sdl, GameState* state) {
 	}
 }
 
+// funkcja rysuj¹ca przecinwnika w stosunku do po³o¿enia kamery
 void drawEnemy(SDL_Renderer* renderer, Enemy* enemy, Camera* camera) {
 	SDL_Texture* enemyTex;
 	if(enemy->currentAction == ACTION_IDLE) {
@@ -801,6 +820,7 @@ void drawEnemy(SDL_Renderer* renderer, Enemy* enemy, Camera* camera) {
 	SDL_SetTextureColorMod(enemyTex, 255, 255, 255);
 }
 
+// funkcja rusuj¹ca prostok¹ty pokazuj¹ce hitboxy i hurtboxy wszystkich postaci
 void drawHitboxes(SDLContext* sdl, GameState* state) {
 	if (!state->buffer.showDebug) return;
 
@@ -846,19 +866,20 @@ void drawHitboxes(SDLContext* sdl, GameState* state) {
 //       FUNCKCJE LOGIC
 //=================================
 
+// funkcja wywo³ywana gdy gracz rozpoczyna dan¹ akcjê o danym czasie trwania
+// (zerowanie timerów, frame counterów, itp)
 void startAction(Player* player, int action, double duration) {
-	// Ustawiamy now¹ akcjê i czas jej trwania
 	player->currentAction = action;
 	player->actionTimer = duration;
 
-	// KLUCZOWE: Resetujemy animacjê do pocz¹tku!
 	player->currentFrame = 0;
 	player->animTimer = 0.0;
 
-	// Resetujemy flagê trafienia (wa¿ne dla ataków)
 	player->hasHit = false;
 }
 
+// funkcja obs³uguj¹ca kolizje hitboxów ataków i hurtboxów postaci
+// gracz uderzea wroga / wróg uderza gracza
 void handleAttacks(GameState* state) {
 	if (state->enemy.hitTimer > 0) {
 		state->enemy.hitTimer -= state->time.delta;
@@ -893,6 +914,8 @@ void handleAttacks(GameState* state) {
 
 }
 
+// funkcja sprawdzaj¹ca czy w buforze znajduje siê dana sekwencja
+// (na ostatnim miejscu nie wczeœniej)
 bool checkSequence(Buffer* buffer, Sequence* sequence) {
 	for (int i = 0; i < sequence->len; i++) {
 		int requiredInput = sequence->sequence[sequence->len - 1 - i];
@@ -917,6 +940,7 @@ bool checkSequence(Buffer* buffer, Sequence* sequence) {
 	return true;
 }
 
+// funkcja wykonuj¹ca akcjê w odniesieniu do wprowadzonych inputów
 void resolveInputs(GameState* state) {
 	// sprawdzanie combosów
 	for (int i = 0; i < state->sequencesCount; i++) {
@@ -942,7 +966,6 @@ void resolveInputs(GameState* state) {
 				startAction(&state->player, ACTION_DASH, TIME_DASH);
 				state->player.direction = LEFT;
 			}
-
 			return;
 		}
 	}
@@ -961,6 +984,7 @@ void resolveInputs(GameState* state) {
 	}
 }
 
+// funkcja aktualizuj¹ca zmienne odnoœnie punktów i combo
 void updateScoreLogic(Score* score, double delta) {
 	// ograniczenie combo
 	if (score->comboMultipler > 5) {
@@ -974,6 +998,7 @@ void updateScoreLogic(Score* score, double delta) {
 	}
 }
 
+// funkcja aktualizuj¹ca akcjê gracza w zale¿noœci od czasu i bufora
 void updatePlayerAction(GameState* state) {
 	if (state->buffer.headIndex != state->buffer.previousHeadIndex) {
 		resolveInputs(state);
@@ -991,6 +1016,8 @@ void updatePlayerAction(GameState* state) {
 	}
 }
 
+// funkcja obs³uguj¹ca ruch gracza. Odbiera klikniêcia i przytrzymania 
+// klawiszy WSAD i zmienia pozycjê x,y gracza
 void movePlayer(Player* player, double delta, int end) {
 	// obs³uga dasha
 	if (player->currentAction == ACTION_DASH) {
@@ -1007,6 +1034,7 @@ void movePlayer(Player* player, double delta, int end) {
 			player->currentAction = ACTION_IDLE;
 		}
 
+		// obs³uga klawiszy WSAD
 		const Uint8* kaystate = SDL_GetKeyboardState(NULL);
 		if (kaystate[SDL_SCANCODE_W]){
 			player->y -= (int)(player->speed * delta);
@@ -1045,6 +1073,7 @@ void movePlayer(Player* player, double delta, int end) {
 	}
 }
 
+// aktualizacja czasu i fps
 void updateTime(Time *time) {
 	time->t2 = SDL_GetTicks();
 	time->delta = (time->t2 - time->t1) * 0.001;
@@ -1107,6 +1136,8 @@ void updatePlayerAnimation(Player* player, double delta) {
 	}
 }
 
+// funkcja aktualizuj¹ca pozycjê kamery, przesuwa kamerê je¿eli
+// gracz napiera na któr¹œ z œciañ ekranu (z marginesem)
 void updateCamera(GameState* state, int mapWidth) {
 	// gdy gracz jest przy prawej krawêdzi ekranu to ruch kamer¹
 	if ((state->player.x + state->player.w) > state->camera.x + SCREEN_WIDTH - CAMERA_MARGIN) {
@@ -1125,23 +1156,23 @@ void updateCamera(GameState* state, int mapWidth) {
 	}
 }
 
-void updateInputs(GameState* state) {
-	
-}
-
+// funkcja wrzucaj¹ca dany input do bufora, je¿êli ma wpisaæ poza
+// to nadpisuje pocz¹tek
 void pushInput(Buffer* buffer, int inputCode) {
 	buffer->inputs[buffer->headIndex].input = inputCode;
 	buffer->inputs[buffer->headIndex].time = SDL_GetTicks();
 	buffer->headIndex = (buffer->headIndex + 1) % INPUT_BUFFER_SIZE;
 }
 
+// funkcja logiki wykonywania rzeczy przez przeciwnika
+// co 3 sekundy atakuje LIGHT_ATACK
 void updateEnemy(Enemy* enemy, double delta) {
 	if (enemy->currentAction == ACTION_IDLE) {
 		enemy->attackCooldown -= delta;
 		if (enemy->attackCooldown <= 0) {
 			enemy->currentAction = ACTION_LIGHT;
 			enemy->actionTimer = TIME_ATTACK_LIGHT;
-			enemy->attackCooldown = 3.0;
+			enemy->attackCooldown = ENEMY_ATTACK_COOLDOWN;
 			enemy->hasHit = false;
 		}
 	}
@@ -1154,10 +1185,11 @@ void updateEnemy(Enemy* enemy, double delta) {
 	}
 }
 
-// G£ÓWNE FUNKCJE LOGIKI GRY
+//=================================
+//   G£ÓWNE FUNKCJE LOGIKI GRY
+//=================================
 
-// obs³ugiwanie prostych zdarzeñ typu escape
-// albo zakoñczenie programu
+// obs³ugiwanie zdarzeñ klikniêæ z klawiatury oraz zamkniêcie okna
 void handleEvents(GameState* state, const SDLContext* sdl) {
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
@@ -1201,6 +1233,7 @@ void updateGame(GameState* state, SDLContext* sdl) {
 	updateScoreLogic(&state->score, state->time.delta);
 }
 
+// renderowanie klatki
 void render(GameState* state, SDLContext* sdl) {
 	// czyszczenie ekranu przed now¹ klatk¹
 	SDL_FillRect(sdl->screen, NULL, SDL_MapRGBA(sdl->screen->format, 0, 0, 0, 0));
