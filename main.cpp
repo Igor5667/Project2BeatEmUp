@@ -2,6 +2,7 @@
 #include<math.h>
 #include<stdio.h>
 #include<string.h>
+#include <stdlib.h>
 
 extern "C" {
 #include"./SDL2-2.0.10/include/SDL.h"
@@ -131,12 +132,18 @@ struct Enemy {
 };
 
 struct Colors {
+	int white;
 	int black;
 	int green;
 	int red;
 	int blue;
 	int lightBlue;
 	int lightGreen;
+	int combo1;
+	int combo2;
+	int combo3;
+	int combo4;
+	int combo5;
 };
 
 struct Camera {
@@ -325,12 +332,20 @@ void initTime(Time* time) {
 }
 
 void initColors(Colors* colors, const SDL_PixelFormat* format) {
+	colors->black = SDL_MapRGB(format, 0xFF, 0xFF, 0xFF);
 	colors->black = SDL_MapRGB(format, 0x00, 0x00, 0x00);
 	colors->green = SDL_MapRGB(format, 0x00, 0xFF, 0x00);
 	colors->red = SDL_MapRGB(format, 0xFF, 0x00, 0x00);
 	colors->blue = SDL_MapRGB(format, 0x11, 0x11, 0xCC);
 	colors->lightBlue = SDL_MapRGB(format, 0x5D, 0xED, 0xF7);
 	colors->lightGreen = SDL_MapRGB(format, 0x7E, 0xC8, 0x50);
+
+	// kolory do combo
+	colors->combo1 = SDL_MapRGB(format, 255, 180, 180);
+	colors->combo2 = SDL_MapRGB(format, 255, 80, 80);
+	colors->combo3 = SDL_MapRGB(format, 255, 0, 0);
+	colors->combo4 = SDL_MapRGB(format, 180, 0, 0);
+	colors->combo5 = SDL_MapRGB(format, 100, 0, 0);
 }
 
 void initBuffer(Buffer* buffer) {
@@ -507,13 +522,18 @@ void cleanup(SDLContext* sdl, GameState* state) {
 // narysowanie napisu txt na powierzchni screen, zaczynaj¹c od punktu (x, y)
 // charset to bitmapa 128x128 zawieraj¹ca znaki
 void DrawString(SDL_Surface *screen, int x, int y, const char *text,
-                SDL_Surface *charset) {
+                SDL_Surface *charset, int scale, int color) {
 	int px, py, c;
 	SDL_Rect s, d;
 	s.w = 8;
 	s.h = 8;
-	d.w = 8;
-	d.h = 8;
+	d.w = 8 * scale;
+	d.h = 8 * scale;
+
+	Uint8 r, g, b;
+	SDL_GetRGB(color, screen->format, &r, &g, &b);
+	SDL_SetSurfaceColorMod(charset, r, g, b);
+
 	while(*text) {
 		c = *text & 255;
 		px = (c % 16) * 8;
@@ -522,11 +542,13 @@ void DrawString(SDL_Surface *screen, int x, int y, const char *text,
 		s.y = py;
 		d.x = x;
 		d.y = y;
-		SDL_BlitSurface(charset, &s, screen, &d);
-		x += 8;
+		SDL_BlitScaled(charset, &s, screen, &d);
+		x += 8 * scale;
 		text++;
-		};
 	};
+
+	SDL_SetSurfaceColorMod(charset, 255, 255, 255);
+};
 
 // narysowanie na ekranie screen powierzchni sprite w punkcie (x, y)
 // (x, y) to punkt œrodka obrazka sprite na ekranie
@@ -607,7 +629,9 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 		sdl->screen->w / 2 - (strlen(text) * CHAR_WIDTH) / 2,
 		INFO_LINE_1_Y,
 		text,
-		sdl->charset
+		sdl->charset,
+		1,
+		state->colors.white
 	);
 
 	// linia 2
@@ -616,7 +640,9 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 		sdl->screen->w / 2 - (strlen(text) * CHAR_WIDTH) / 2,
 		INFO_LINE_2_Y,
 		text,
-		sdl->charset
+		sdl->charset,
+		1,
+		state->colors.white
 	);
 
 	sprintf(text, "Uzyskane punkty: %d   Mnoznik combo: %.1lf", state->score.points, state->score.comboMultipler);
@@ -624,8 +650,44 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 		sdl->screen->w / 2 - (strlen(text) * CHAR_WIDTH) / 2,
 		INFO_LINE_3_Y,
 		text,
-		sdl->charset
+		sdl->charset,
+		1,
+		state->colors.white
 	);
+}
+
+void drawComboMultiplier(SDLContext* sdl, GameState* state) {
+	if (state->score.comboMultipler <= 1.0) return;
+
+	char text[32];
+	sprintf(text, "COMBO x%.1lf", state->score.comboMultipler);
+
+	// czym wieksze combo tym wiekszy napis
+	int scale = 2 + (int)(state->score.comboMultipler)/4;
+	if (scale > 8) scale = 8;
+
+	// ustawienie pozycji
+	int textWidth = strlen(text) * 8 * scale;
+	int x = (SCREEN_WIDTH / 2) - (textWidth / 2);
+	int y = SCREEN_HEIGHT - 80;
+
+	// drganie i powiêkszenie
+	if (state->score.comboTimer > 1.8) {
+		y += (rand() % 10) - 5;
+		x -= 20;
+		scale += 1;
+	}
+
+	Uint32 drawColor;
+	double combo = state->score.comboMultipler;
+
+	if (combo < 2.0)      drawColor = state->colors.combo1;
+	else if (combo < 3.0) drawColor = state->colors.combo2;
+	else if (combo < 4.0) drawColor = state->colors.combo3;
+	else if (combo < 5.0) drawColor = state->colors.combo4;
+	else                  drawColor = state->colors.combo5;
+
+	DrawString(sdl->screen, x, y, text, sdl->charset, scale, drawColor);
 }
 
 SDL_Rect getPlayerHurtbox(Player* player) {
@@ -686,7 +748,7 @@ void drawDebugOverlay(SDLContext* sdl, GameState* state) {
         }
         strcat(text, "]");
 
-		DrawString(sdl->screen, 10, SCREEN_HEIGHT-15, text, sdl->charset);
+		DrawString(sdl->screen, 10, SCREEN_HEIGHT-15, text, sdl->charset, 1, state->colors.white);
 	}
 }
 
@@ -1030,6 +1092,8 @@ void pushInput(Buffer* buffer, int inputCode) {
 	buffer->headIndex = (buffer->headIndex + 1) % INPUT_BUFFER_SIZE;
 }
 
+// G£ÓWNE FUNKCJE LOGIKI GRY
+
 // obs³ugiwanie prostych zdarzeñ typu escape
 // albo zakoñczenie programu
 void handleEvents(GameState* state, const SDLContext* sdl) {
@@ -1087,6 +1151,7 @@ void render(GameState* state, SDLContext* sdl) {
 	drawHitboxes(sdl, state);
 	drawInfo(sdl, state);
 	drawDebugOverlay(sdl, state);
+	drawComboMultiplier(sdl, state);
 
 	// wysy³anie na ekran
 	SDL_UpdateTexture(sdl->scrtex, NULL, sdl->screen->pixels, sdl->screen->pitch);
