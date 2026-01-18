@@ -25,16 +25,31 @@ extern "C" {
 #define DASH_SPEED 700.0
 #define PLAYER_WIDTH 128
 #define PLAYER_HEIGHT 128
-#define HURTBOX_WIDTH 50
-#define HURTBOX_HEIGHT 98
-#define HURTBOX_OFF_X 39
-#define HURTBOX_OFF_Y 39
+#define HURTBOX_WIDTH 40
+#define HURTBOX_HEIGHT 90
+#define HURTBOX_OFF_X 44
+#define HURTBOX_OFF_Y 44
+#define HIT_X_OFFSET 20
 // enemy
-#define ENEMY_INIT_WIDTH 125
-#define ENEMY_INIT_HEIGHT 125
+#define ENEMY_INIT_WIDTH 128
+#define ENEMY_INIT_HEIGHT 128
 #define ENEMY_POS_X 500
 #define ENEMY_POS_Y 350
 #define ENEMY_ATTACK_COOLDOWN 3.0
+// enemies
+#define MAX_ENEMIES 2
+#define ENEMY_TYPE_SIMPLE 0
+#define ENEMY_TYPE_CHARGER 1
+#define ENEMY_SPEED_WALK 100.0
+#define ENEMY_SPEED_CHARGE 600.0
+#define ATTACK_RANGE 60
+// enemy charger
+#define CHARGER_KEEP_DIST 250
+#define CHARGER_ALIGN_Y 10      
+#define AI_STATE_ALIGN 0
+#define AI_STATE_PREPARE 1
+#define AI_STATE_CHARGE 2
+#define AI_STATE_COOLDOWN 3
 // predkoœci akcji
 #define ANIM_SPEED_WALK 0.1
 #define ANIM_SPEED_IDLE 0.35
@@ -43,6 +58,9 @@ extern "C" {
 #define TIME_JUMP 1.0
 #define TIME_DASH 0.3
 #define TIME_HURT 0.5
+// combo
+#define COMBO_COOLDOWN 2.0
+#define COMBO_MULTIPLER_ADD_VALUE 0.4
 // directions
 #define LEFT 1
 #define RIGHT 0
@@ -54,6 +72,7 @@ extern "C" {
 #define ACTION_WALK 4
 #define ACTION_DASH 5
 #define ACTION_HURT 6
+#define MAX_ACTIONS_WITH_HITBOX 3
 // buffer
 #define INPUT_BUFFER_SIZE 5
 #define MAX_SEQ_LEN 10
@@ -97,7 +116,7 @@ struct Sequence {
 	int maxTimeGap;
 };
 
-struct InputEvenet {
+struct InputEvent {
 	int input;
 	Uint32 time;
 };
@@ -120,7 +139,7 @@ struct PlayerTextures {
 };
 
 struct Entity {
-	int x, y;
+	double x, y;
 	int w, h;
 	int direction;
 	int currentAction;
@@ -136,10 +155,24 @@ struct Player: Entity {
 	double animTimer;
 };
 
-struct Enemy: Entity {
-	double attackCooldown;
+struct EnemyTextures {
 	SDL_Texture* idle;
+	int idleFrames;
+	SDL_Texture* walk;
+	int walkFrames;
 	SDL_Texture* attLight;
+	int attLightFrames;
+};
+
+struct Enemy: Entity {
+	bool active;
+	int type;
+	double attackCooldown;
+	int aiState;
+	double aiTimer;
+	EnemyTextures textures;
+	int currentFrame;
+	double animTimer;
 };
 
 struct Colors {
@@ -175,7 +208,7 @@ struct Time {
 };
 
 struct Buffer {
-	InputEvenet inputs[INPUT_BUFFER_SIZE];
+	InputEvent inputs[INPUT_BUFFER_SIZE];
 	int headIndex;
 	int previousHeadIndex;
 	bool showDebug;
@@ -190,7 +223,7 @@ struct Score {
 // g³ówna struktura stanu gry
 struct GameState {
 	Player player;
-	Enemy enemy;
+	Enemy enemies[MAX_ENEMIES];
 	Colors colors;
 	Camera camera;
 	Time time;
@@ -198,7 +231,7 @@ struct GameState {
 	Score score;
 	int quit;
 
-	Sequence definedSeqences[MAX_SEQUENCES];
+	Sequence definedSequences[MAX_SEQUENCES];
 	int sequencesCount;
 };
 
@@ -210,10 +243,6 @@ struct SDLContext {
 	SDL_Texture* scrtex;
 	SDL_Surface* charset;
 
-	SDL_Texture* enemyIdle;
-	int enemyWidth;
-	int enemyHeight;
-
 	SDL_Texture* background;
 	int bgWidth;
 	int bgHeight;
@@ -223,11 +252,11 @@ struct SDLContext {
 const char* actionNames[] = {
 	"IDLE",     // 0
 	"LIGHT",    // 1
-	"HEAVY"     // 2
-	"JUMP"      // 3
-	"WALK"      // 4
-	"DASH"      // 5
-	"HURT"      // 6
+	"HEAVY",    // 2
+	"JUMP",     // 3
+	"WALK",     // 4
+	"DASH",     // 5
+	"HURT",     // 6
 };
 const char* inputNames[] = {
 	"...",      // INPUT_NONE
@@ -241,11 +270,12 @@ const char* inputNames[] = {
 };
 
 // dane do hitboxów ataków
+// (w, h, yOffset, damage, active)
 const AttackData attacksData[] = {
 	{ 0, 0, 0, 0, false },		// 0 ACTION_IDLE
-	{ 60, 50, 60, 10, true },	// 1 ACTION_LIGHT
-	{ 120, 60, 70, 20, true },  // 2 ACTION_HEAVY
-	{ 60, 90, 120, 15, true },	// 3 ACTION_JUMP
+	{ 40, 20, 60, 10, true },	// 1 ACTION_LIGHT
+	{ 50, 30, 60, 20, true },   // 2 ACTION_HEAVY
+	{ 40, 40, 100, 15, true },	// 3 ACTION_JUMP
 	{ 0, 0, 0, 0, false },		// 4 ACTION_WALK
 	{ 0, 0, 0, 0, false },		// 5 ACTION_DASH
 	{ 0, 0, 0, 0, false }		// 6 ACTION_HURT
@@ -281,7 +311,7 @@ SDL_Texture* loadTexture(SDL_Renderer* renderer, const char* path, int* outW, in
 SDL_Rect getHitBox(Entity* entity) {
 	SDL_Rect box = { 0, 0, 0, 0 };
 
-	if (entity->currentAction < 0 || entity->currentAction > 3) return box;
+	if (entity->currentAction < 0 || entity->currentAction > MAX_ACTIONS_WITH_HITBOX) return box;
 
 	AttackData data = attacksData[entity->currentAction];
 
@@ -293,10 +323,10 @@ SDL_Rect getHitBox(Entity* entity) {
 
 	// ustawianie kierunku ataku
 	if (entity->direction == RIGHT) {
-		box.x = entity->x + entity->w - HURTBOX_OFF_X;
+		box.x = entity->x + entity->w - HURTBOX_OFF_X - HIT_X_OFFSET;
 	}
 	else {
-		box.x = entity->x - box.w + HURTBOX_OFF_X;
+		box.x = entity->x - box.w + HURTBOX_OFF_X + HIT_X_OFFSET;
 	}
 
 	return box;
@@ -339,7 +369,7 @@ SDL_Texture* getCurrentPlayerTexture(Player* player) {
 
 // funkcja sprawdza element n-ty od koñca
 // 0 - zwraca ostatni, 1 - przedostatni
-InputEvenet* getInputBack(Buffer* buffer, int stepsBack) {
+InputEvent* getInputBack(Buffer* buffer, int stepsBack) {
 	int index = (buffer->headIndex - 1 - stepsBack + INPUT_BUFFER_SIZE) % INPUT_BUFFER_SIZE;
 	return &buffer->inputs[index];
 }
@@ -363,10 +393,12 @@ void initPlayer(Player* player) {
 	player->animTimer = 0.0;
 }
 
-// inicjalizacja wroga
-void initEnemy(Enemy* enemy) {
-	enemy->x = ENEMY_POS_X;
-	enemy->y = ENEMY_POS_Y;
+// ustawiania wroga
+void spawnEnemy(Enemy* enemy, int type, double x, double y) {
+	enemy->active = true;
+	enemy->type = type;
+	enemy->x = x;
+	enemy->y = y;
 	enemy->w = ENEMY_INIT_WIDTH;
 	enemy->h = ENEMY_INIT_HEIGHT;
 	enemy->currentAction = ACTION_IDLE;
@@ -375,6 +407,16 @@ void initEnemy(Enemy* enemy) {
 	enemy->hasHit = false;
 	enemy->attackCooldown = ENEMY_ATTACK_COOLDOWN;
 	enemy->hitTimer = 0.0;
+	enemy->aiState = 0;
+	enemy->aiTimer = 0.0;
+	enemy->currentFrame = 0;
+	enemy->animTimer = 0.0;
+}
+
+// inicjalizacja wrogów
+void initEnemies(GameState* state) {
+	spawnEnemy(&state->enemies[0], ENEMY_TYPE_SIMPLE, 500, 350);
+	spawnEnemy(&state->enemies[1], ENEMY_TYPE_CHARGER, 700, 350);
 }
 
 // inicjalizacja pozycji i wielkoœci kamery
@@ -396,7 +438,7 @@ void initTime(Time* time) {
 
 // inicjalizacja kolorów
 void initColors(Colors* colors, const SDL_PixelFormat* format) {
-	colors->black = SDL_MapRGB(format, 0xFF, 0xFF, 0xFF);
+	colors->white = SDL_MapRGB(format, 0xFF, 0xFF, 0xFF);
 	colors->black = SDL_MapRGB(format, 0x00, 0x00, 0x00);
 	colors->green = SDL_MapRGB(format, 0x00, 0xFF, 0x00);
 	colors->red = SDL_MapRGB(format, 0xFF, 0x00, 0x00);
@@ -404,7 +446,7 @@ void initColors(Colors* colors, const SDL_PixelFormat* format) {
 	colors->lightBlue = SDL_MapRGB(format, 0x5D, 0xED, 0xF7);
 	colors->lightGreen = SDL_MapRGB(format, 0x7E, 0xC8, 0x50);
 
-	// kolory do combo
+	// kolory do combo napisu
 	colors->combo1 = SDL_MapRGB(format, 255, 180, 180);
 	colors->combo2 = SDL_MapRGB(format, 255, 80, 80);
 	colors->combo3 = SDL_MapRGB(format, 255, 0, 0);
@@ -428,7 +470,7 @@ void initBuffer(Buffer* buffer) {
 void initSequences(GameState* state) {
 	state->sequencesCount = 0;
 
-	Sequence* s1 = &state->definedSeqences[state->sequencesCount++];
+	Sequence* s1 = &state->definedSequences[state->sequencesCount++];
 	s1->name = "Triple hit";
 	s1->len = 3;
 	s1->sequence[0] = INPUT_ATTACK_LIGHT;
@@ -436,21 +478,21 @@ void initSequences(GameState* state) {
 	s1->sequence[2] = INPUT_ATTACK_LIGHT;
 	s1->maxTimeGap = 250;
 
-	Sequence* s2 = &state->definedSeqences[state->sequencesCount++];
+	Sequence* s2 = &state->definedSequences[state->sequencesCount++];
 	s2->name = "Dash Right";
 	s2->len = 2;
 	s2->sequence[0] = INPUT_RIGHT;
 	s2->sequence[1] = INPUT_RIGHT;
 	s2->maxTimeGap = 200;
 
-	Sequence* s3 = &state->definedSeqences[state->sequencesCount++];
+	Sequence* s3 = &state->definedSequences[state->sequencesCount++];
 	s3->name = "Dash Left";
 	s3->len = 2;
 	s3->sequence[0] = INPUT_LEFT;
 	s3->sequence[1] = INPUT_LEFT;
 	s3->maxTimeGap = 200;
 
-	Sequence* s4 = &state->definedSeqences[state->sequencesCount++];
+	Sequence* s4 = &state->definedSequences[state->sequencesCount++];
 	s4->name = "Jump";
 	s4->len = 4;
 	s4->sequence[0] = INPUT_ATTACK_HEAVY;
@@ -470,7 +512,7 @@ void initScore(Score* score) {
 // inicjalizacja stanu gry oraz kolorów(dlatego przekazujemy surface ekranu)
 void initGameState(GameState* state, const SDLContext* sdl) {
 	initPlayer(&state->player);
-	initEnemy(&state->enemy);
+	initEnemies(state);
 	initCamera(&state->camera);
 	initTime(&state->time);
 	initColors(&state->colors, sdl->screen->format);
@@ -484,7 +526,7 @@ void initGameState(GameState* state, const SDLContext* sdl) {
 bool initSDL(SDLContext* sdl) {
 	if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
 		printf("SDL_Init error: %s\n", SDL_GetError());
-		return 1;
+		return false;
 	}
 
 	// tryb pe³noekranowy / fullscreen mode
@@ -514,6 +556,8 @@ bool initSDL(SDLContext* sdl) {
 
 	// wy³¹czenie widocznoœci kursora myszy
 	SDL_ShowCursor(SDL_DISABLE);
+
+	return true;
 }
 
 // funkcja ³aduj¹ca zasoby (obrazy, czcionki, itp)
@@ -526,11 +570,10 @@ bool loadAssets(SDLContext* sdl, GameState* state) {
 	};
 	SDL_SetColorKey(sdl->charset, true, 0x000000);
 
-	// wczytywanie tekstur
-	state->enemy.attLight = loadTexture(sdl->renderer, "./textures/enemy_att_light.bmp", &state->enemy.w, &state->enemy.h);
-	state->enemy.idle = loadTexture(sdl->renderer, "./textures/enemy_idle.bmp", &state->enemy.w, &state->enemy.h);
+	// wczytywanie backgroundu
 	sdl->background = loadTexture(sdl->renderer, "./textures/background.bmp", &sdl->bgWidth, &sdl->bgHeight);
 
+	// wczytywanie tekstur gracza
 	int textureWidth, textureHeight;
 	state->player.textures.idle = loadTexture(sdl->renderer, "./textures/aminations/player_idle.bmp", &textureWidth, &textureHeight);
 	state->player.textures.idleFrames = textureWidth / PLAYER_WIDTH;
@@ -553,6 +596,26 @@ bool loadAssets(SDLContext* sdl, GameState* state) {
 	state->player.textures.hurt = loadTexture(sdl->renderer, "./textures/aminations/player_hurt.bmp", &textureWidth, &textureHeight);
 	state->player.textures.hurtFrames = textureWidth / PLAYER_WIDTH;
 
+	// wczytywanie enemies
+	state->enemies[0].textures.idle = loadTexture(sdl->renderer, "./textures/enemy_simple_idle.bmp", &textureWidth, &textureHeight);
+	state->enemies[0].textures.idleFrames = 1; // akurat jedna klatka bêdzie
+
+	state->enemies[0].textures.walk = loadTexture(sdl->renderer, "./textures/aminations/enemy_simple_walk.bmp", &textureWidth, &textureHeight);
+	state->enemies[0].textures.walkFrames = textureWidth / ENEMY_INIT_WIDTH;
+
+	state->enemies[0].textures.attLight = loadTexture(sdl->renderer, "./textures/aminations/enemy_simple_att_light.bmp", &textureWidth, &textureHeight);
+	state->enemies[0].textures.attLightFrames = textureWidth / ENEMY_INIT_WIDTH;
+
+	// na razie kopiujemy do drugiego wroga
+	state->enemies[1].textures.idle = state->enemies[0].textures.idle;
+	state->enemies[1].textures.idleFrames = state->enemies[0].textures.idleFrames;
+
+	state->enemies[1].textures.walk = state->enemies[0].textures.walk;
+	state->enemies[1].textures.walkFrames = state->enemies[0].textures.walkFrames;
+
+	state->enemies[1].textures.attLight = state->enemies[0].textures.attLight;
+	state->enemies[1].textures.attLightFrames = state->enemies[0].textures.attLightFrames;
+	
 	if(!sdl->background || !state->player.textures.idle || !state->player.textures.walk || !state->player.textures.attLight 
 	|| !state->player.textures.attHeavy || !state->player.textures.jump || !state->player.textures.hurt) {
 		return false;
@@ -567,12 +630,11 @@ void cleanup(SDLContext* sdl, GameState* state) {
 	if (sdl->charset) SDL_FreeSurface(sdl->charset);
 	if (sdl->screen)  SDL_FreeSurface(sdl->screen);
 
-	// Zwalnianie tekstur, renderera i okna
+	// Zwalnianie tekstur renderera i okna
 	if (sdl->background)   SDL_DestroyTexture(sdl->background);
 	if (sdl->scrtex)   SDL_DestroyTexture(sdl->scrtex);
 	if (sdl->renderer) SDL_DestroyRenderer(sdl->renderer);
 	if (sdl->window)   SDL_DestroyWindow(sdl->window);
-	if (sdl->enemyIdle) SDL_DestroyTexture(sdl->enemyIdle);
 
 	// Zwalnianie tekstur gracza
 	if (state->player.textures.idle) SDL_DestroyTexture(state->player.textures.idle);
@@ -581,6 +643,10 @@ void cleanup(SDLContext* sdl, GameState* state) {
 	if (state->player.textures.attHeavy) SDL_DestroyTexture(state->player.textures.attHeavy);
 	if (state->player.textures.jump) SDL_DestroyTexture(state->player.textures.jump);
 	if (state->player.textures.hurt) SDL_DestroyTexture(state->player.textures.hurt);
+
+	// Zwalnianie tekstur enemies
+	if (state->enemies[0].textures.idle) SDL_DestroyTexture(state->enemies[0].textures.idle);
+	if (state->enemies[0].textures.attLight) SDL_DestroyTexture(state->enemies[0].textures.attLight);
 
 	// Wy³¹czenie SDL
 	SDL_Quit();
@@ -712,7 +778,7 @@ void drawInfo(SDLContext* sdl, GameState* state) {
 	);
 
 	// linia 2
-	sprintf(text, "Zrealizowano: obligatory-5/5 optional-0/8");
+	sprintf(text, "Zrealizowano: obligatory-5/5 optional-3/8");
 	DrawString(sdl->screen,
 		sdl->screen->w / 2 - (strlen(text) * CHAR_WIDTH) / 2,
 		INFO_LINE_2_Y,
@@ -819,27 +885,43 @@ void drawDebugOverlay(SDLContext* sdl, GameState* state) {
 }
 
 // funkcja rysuj¹ca przecinwnika w stosunku do po³o¿enia kamery
-void drawEnemy(SDL_Renderer* renderer, Enemy* enemy, Camera* camera) {
-	SDL_Texture* enemyTex;
-	if(enemy->currentAction == ACTION_IDLE) {
-		enemyTex = enemy->idle;
-	} else if(enemy->currentAction == ACTION_LIGHT) {
-		enemyTex = enemy->attLight;
+void drawEnemies(SDL_Renderer* renderer, GameState* state) {
+	Camera* camera = &state->camera;
+
+	for (int i = 0; i < MAX_ENEMIES; i++) {
+		Enemy* enemy = &state->enemies[i];
+		if (!enemy->active) continue;
+
+		SDL_Texture* textureToDraw = enemy->textures.idle;
+		// wybieranie tekstury
+		switch (enemy->currentAction) {
+			case ACTION_WALK: textureToDraw = enemy->textures.walk; break;
+			case ACTION_LIGHT: textureToDraw = enemy->textures.attLight; break;
+			default: textureToDraw = enemy->textures.idle; break;
+		}
+
+		// ustawianie obecnego framea w teksturze
+		SDL_Rect srcRect;
+		srcRect.x = enemy->currentFrame * ENEMY_INIT_WIDTH;
+		srcRect.y = 0;
+		srcRect.w = ENEMY_INIT_WIDTH;
+		srcRect.h = ENEMY_INIT_HEIGHT;
+
+		// pozycja na ekranie
+		SDL_Rect destRect;
+		destRect.x = (int)(enemy->x - camera->x);
+		destRect.y = (int)(enemy->y - camera->y - enemy->h);
+		destRect.w = enemy->w;
+		destRect.h = enemy->h;
+
+		// Gdy jest uderzony to czerwony
+		if (enemy->hitTimer > 0) SDL_SetTextureColorMod(textureToDraw, 255, 50, 50);
+		else SDL_SetTextureColorMod(textureToDraw, 255, 255, 255);
+
+		SDL_RendererFlip flip = (enemy->direction == LEFT) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+
+		SDL_RenderCopyEx(renderer, textureToDraw, &srcRect, &destRect, 0.0, NULL, flip);
 	}
-
-	SDL_Rect destRect;
-	destRect.x = enemy->x - camera->x;
-	destRect.y = enemy->y - camera->y - enemy->h;
-	destRect.w = enemy->w;
-	destRect.h = enemy->h;
-
-	// je¿eli jest uderzony to czerwony
-	if (enemy->hitTimer > 0)  SDL_SetTextureColorMod(enemyTex, 255, 50, 50);
-
-	SDL_RenderCopyEx(renderer, enemyTex, NULL, &destRect, 0.0, NULL, SDL_FLIP_HORIZONTAL);
-
-	// powrot do normalnego koloru
-	SDL_SetTextureColorMod(enemyTex, 255, 255, 255);
 }
 
 // funkcja rusuj¹ca prostok¹ty pokazuj¹ce hitboxy i hurtboxy wszystkich postaci
@@ -855,12 +937,6 @@ void drawHitboxes(SDLContext* sdl, GameState* state) {
 	int py = playerBox.y - cam->y;
 	DrawRectangle(sdl->screen, px, py, playerBox.w, playerBox.h, col->green, -1);
 
-	// Rysowanie hurtboxa enemy
-	SDL_Rect enemyBox = getHurtbox(&state->enemy);
-	int ex = enemyBox.x - cam->x;
-	int ey = enemyBox.y - cam->y;
-	DrawRectangle(sdl->screen, ex, ey, enemyBox.w, enemyBox.h, col->green, -1);
-
 	// Rysowanie hitboxa ataków playera
 	SDL_Rect attackBox = getHitBox(&state->player);
 	if (attackBox.w > 0) {
@@ -872,16 +948,28 @@ void drawHitboxes(SDLContext* sdl, GameState* state) {
 			col->red, -1);
 	}
 
-	// Rysowanie hitboxa ataków enemy
-	SDL_Rect enemyAttackBox = getHitBox(&state->enemy);
-	if (enemyAttackBox.w > 0) {
-		DrawRectangle(sdl->screen,
-			enemyAttackBox.x - cam->x,
-			enemyAttackBox.y - cam->y,
-			enemyAttackBox.w,
-			enemyAttackBox.h,
-			col->red, -1);
+	for(int i = 0; i < MAX_ENEMIES; i++) {
+		Enemy* enemy = &state->enemies[i];
+		if (!enemy->active) continue;
+
+		// Rysowanie hurtboxa enemy
+		SDL_Rect enemyBox = getHurtbox(enemy);
+		int ex = enemyBox.x - cam->x;
+		int ey = enemyBox.y - cam->y;
+		DrawRectangle(sdl->screen, ex, ey, enemyBox.w, enemyBox.h, col->green, -1);
+
+		// Rysowanie hitboxa ataków enemy
+		SDL_Rect enemyAttackBox = getHitBox(enemy);
+		if (enemyAttackBox.w > 0) {
+			DrawRectangle(sdl->screen,
+				enemyAttackBox.x - cam->x,
+				enemyAttackBox.y - cam->y,
+				enemyAttackBox.w,
+				enemyAttackBox.h,
+				col->red, -1);
+		}
 	}
+	
 }
 
 //=================================
@@ -903,39 +991,40 @@ void startAction(Player* player, int action, double duration) {
 // funkcja obs³uguj¹ca kolizje hitboxów ataków i hurtboxów postaci
 // gracz uderzea wroga / wróg uderza gracza
 void handleAttacks(GameState* state) {
-	if (state->enemy.hitTimer > 0) {
-		state->enemy.hitTimer -= state->time.delta;
-	}
-
 	SDL_Rect playerAttackBox = getHitBox(&state->player);
-	SDL_Rect enemyAttackBox = getHitBox(&state->enemy);
 	SDL_Rect playerHurtBox = getHurtbox(&state->player);
-	SDL_Rect enemyHurtBox = getHurtbox(&state->enemy);
-	
-	// czy player uderzy³ enemy
-	if (checkRectCollision(playerAttackBox, enemyHurtBox) && !state->player.hasHit) {
-		state->player.hasHit = true;
-		state->enemy.hitTimer = 0.2;
 
-		state->score.comboTimer = 2.0;
-		state->score.points += attacksData[state->player.currentAction].damage * state->score.comboMultipler;
-		state->score.comboMultipler += 0.4;
+	for (int i = 0; i < MAX_ENEMIES; i++) {
+		Enemy* enemy = &state->enemies[i];
+		if (!enemy->active) continue;
 
-		if (state->buffer.showDebug) {
-			printf("HIT! Action ID: %d\n", state->player.currentAction);
+		SDL_Rect enemyAttackBox = getHitBox(enemy);
+		SDL_Rect enemyHurtBox = getHurtbox(enemy);
+
+		// czy player uderzy³ enemy
+		if (checkRectCollision(playerAttackBox, enemyHurtBox) && !state->player.hasHit) {
+			state->player.hasHit = true;
+			enemy->hitTimer = 0.2;
+
+			// aktualizacja combo i punktów
+			state->score.comboTimer = COMBO_COOLDOWN;
+			state->score.points += attacksData[state->player.currentAction].damage * state->score.comboMultipler;
+			state->score.comboMultipler += COMBO_MULTIPLER_ADD_VALUE;
+
+			if (state->buffer.showDebug) {
+				printf("HIT! Action ID: %d\n", state->player.currentAction);
+			}
+		}
+
+		// czy enemy uderzy³ playera
+		if (checkRectCollision(enemyAttackBox, playerHurtBox) && !enemy->hasHit) {
+			enemy->hasHit = true;
+			startAction(&state->player, ACTION_HURT, TIME_HURT);
+			if (state->buffer.showDebug) {
+				printf("PLAYER HIT BY ENEMY! Action ID: %d\n", enemy->currentAction);
+			}
 		}
 	}
-
-	// czy enemy uderzy³ playera
-	if (checkRectCollision(enemyAttackBox, playerHurtBox) && !state->enemy.hasHit) {
-		state->enemy.hasHit = true;
-		startAction(&state->player, ACTION_HURT, TIME_HURT);
-
-		if (state->buffer.showDebug) {
-			printf("PLAYER HIT BY ENEMY! Action ID: %d\n", state->enemy.currentAction);
-		}
-	}
-
 }
 
 // funkcja sprawdzaj¹ca czy w buforze znajduje siê dana sekwencja
@@ -943,7 +1032,7 @@ void handleAttacks(GameState* state) {
 bool checkSequence(Buffer* buffer, Sequence* sequence) {
 	for (int i = 0; i < sequence->len; i++) {
 		int requiredInput = sequence->sequence[sequence->len - 1 - i];
-		InputEvenet* event = getInputBack(buffer, i);
+		InputEvent* event = getInputBack(buffer, i);
 
 		// sprawdzanie czy odpowiedni input
 		if (event->input != requiredInput) {
@@ -952,7 +1041,7 @@ bool checkSequence(Buffer* buffer, Sequence* sequence) {
 
 		// sprawdzanie czy za wolno
 		if (i > 0) {
-			InputEvenet* nextEvent = getInputBack(buffer, i - 1);
+			InputEvent* nextEvent = getInputBack(buffer, i - 1);
 			Uint32 diff = nextEvent->time - event->time;
 			if (diff > sequence->maxTimeGap) {
 				return false;
@@ -970,25 +1059,25 @@ void resolveInputs(GameState* state) {
 	if (state->player.currentAction == ACTION_HURT) return;
 	// sprawdzanie combosów
 	for (int i = 0; i < state->sequencesCount; i++) {
-		if (checkSequence(&state->buffer, &state->definedSeqences[i])) {
+		if (checkSequence(&state->buffer, &state->definedSequences[i])) {
 
 			// Logujemy sukces w konsoli
 			if (state->buffer.showDebug) {
-				printf(">>> COMBO DETECTED: %s <<<\n", state->definedSeqences[i].name);
+				printf(">>> COMBO DETECTED: %s <<<\n", state->definedSequences[i].name);
 			}
 
 			// co ma sie staæ w danym combo
-			if (strcmp(state->definedSeqences[i].name, "Triple hit") == 0) {
+			if (strcmp(state->definedSequences[i].name, "Triple hit") == 0) {
 				startAction(&state->player, ACTION_HEAVY, TIME_ATTACK_HEAVY);
 			}
-			else if (strcmp(state->definedSeqences[i].name, "Jump") == 0) {
+			else if (strcmp(state->definedSequences[i].name, "Jump") == 0) {
 				startAction(&state->player, ACTION_JUMP, TIME_JUMP);
 			}
-			else if (strcmp(state->definedSeqences[i].name, "Dash Right") == 0) {
+			else if (strcmp(state->definedSequences[i].name, "Dash Right") == 0) {
 				startAction(&state->player, ACTION_DASH, TIME_DASH);
 				state->player.direction = RIGHT;
 			}
-			else if (strcmp(state->definedSeqences[i].name, "Dash Left") == 0) {
+			else if (strcmp(state->definedSequences[i].name, "Dash Left") == 0) {
 				startAction(&state->player, ACTION_DASH, TIME_DASH);
 				state->player.direction = LEFT;
 			}
@@ -998,7 +1087,7 @@ void resolveInputs(GameState* state) {
 
 	// sprawdzanie podjedyñczych klikniêæ tykji w idle
 	if (state->player.currentAction == ACTION_IDLE) {
-		InputEvenet* lastEvent = getInputBack(&state->buffer, 0);
+		InputEvent* lastEvent = getInputBack(&state->buffer, 0);
 
 		if (lastEvent->input == INPUT_ATTACK_LIGHT) {
 			startAction(&state->player, ACTION_LIGHT, TIME_ATTACK_LIGHT);
@@ -1050,10 +1139,10 @@ void movePlayer(Player* player, double delta, int end) {
 	// obs³uga dasha
 	if (player->currentAction == ACTION_DASH) {
 		if (player->direction == RIGHT) {
-			player->x += (int)(DASH_SPEED * delta);
+			player->x += (DASH_SPEED * delta);
 		}
 		else {
-			player->x -= (int)(DASH_SPEED * delta);
+			player->x -= (DASH_SPEED * delta);
 		}
 	}// je¿eli dashuje to nie da siê sterowaæ
 	else {
@@ -1063,22 +1152,22 @@ void movePlayer(Player* player, double delta, int end) {
 		}
 
 		// obs³uga klawiszy WSAD
-		const Uint8* kaystate = SDL_GetKeyboardState(NULL);
-		if (kaystate[SDL_SCANCODE_W]){
-			player->y -= (int)(player->speed * delta);
+		const Uint8* keystate = SDL_GetKeyboardState(NULL);
+		if (keystate[SDL_SCANCODE_W]){
+			player->y -= (player->speed * delta);
 			player->currentAction = ACTION_WALK;
 		}
-		if (kaystate[SDL_SCANCODE_S]) {
-			player->y += (int)(player->speed * delta);
+		if (keystate[SDL_SCANCODE_S]) {
+			player->y += (player->speed * delta);
 			player->currentAction = ACTION_WALK;
 		}
-		if (kaystate[SDL_SCANCODE_A]) {
-			player->x -= (int)(player->speed * delta);
+		if (keystate[SDL_SCANCODE_A]) {
+			player->x -= (player->speed * delta);
 			player->currentAction = ACTION_WALK;
 			player->direction = LEFT;
 		}
-		if (kaystate[SDL_SCANCODE_D]) { 
-			player->x += (int)(player->speed * delta);
+		if (keystate[SDL_SCANCODE_D]) { 
+			player->x += (player->speed * delta);
 			player->currentAction = ACTION_WALK;
 			player->direction = RIGHT;
 		};
@@ -1169,6 +1258,42 @@ void updatePlayerAnimation(Player* player, double delta) {
 	}
 }
 
+void updateEnemyAnimation(Enemy* enemy, double delta) {
+	int maxFrames = 0;
+	double frameDuration = 0.1;
+
+	switch (enemy->currentAction) {
+		case ACTION_IDLE:
+			maxFrames = enemy->textures.idleFrames;
+			frameDuration = ANIM_SPEED_IDLE;
+			break;
+		case ACTION_WALK:
+			maxFrames = enemy->textures.walkFrames;
+			frameDuration = ANIM_SPEED_WALK;
+			break;
+		case ACTION_LIGHT:
+			maxFrames = enemy->textures.attLightFrames;
+			if (maxFrames > 0) frameDuration = TIME_ATTACK_LIGHT / (double)maxFrames;
+			break;
+		default:
+			maxFrames = enemy->textures.idleFrames;
+			break;
+	}
+
+	// Przesuwanie klatek
+	if (maxFrames > 0) {
+		enemy->animTimer += delta;
+		if (enemy->animTimer >= frameDuration) {
+			enemy->animTimer -= frameDuration;
+			enemy->currentFrame++;
+
+			if (enemy->currentFrame >= maxFrames) {
+				enemy->currentFrame = 0;
+			}
+		}
+	}
+}
+
 // funkcja aktualizuj¹ca pozycjê kamery, przesuwa kamerê je¿eli
 // gracz napiera na któr¹œ z œciañ ekranu (z marginesem)
 void updateCamera(GameState* state, int mapWidth) {
@@ -1197,24 +1322,98 @@ void pushInput(Buffer* buffer, int inputCode) {
 	buffer->headIndex = (buffer->headIndex + 1) % INPUT_BUFFER_SIZE;
 }
 
-// funkcja logiki wykonywania rzeczy przez przeciwnika
-// co 3 sekundy atakuje LIGHT_ATACK
-void updateEnemy(Enemy* enemy, double delta) {
-	if (enemy->currentAction == ACTION_IDLE) {
-		enemy->attackCooldown -= delta;
-		if (enemy->attackCooldown <= 0) {
-			enemy->currentAction = ACTION_LIGHT;
-			enemy->actionTimer = TIME_ATTACK_LIGHT;
-			enemy->attackCooldown = ENEMY_ATTACK_COOLDOWN;
-			enemy->hasHit = false;
-		}
+void moveEnemySimple(Enemy* enemy, Player* player, double delta) {
+	double distX = player->x - enemy->x;
+	double distY = player->y - enemy->y;
+
+	// ustawianie kierunku (patrzy na gracza)
+	if (distX > 0) enemy->direction = RIGHT;
+	else enemy->direction = LEFT;
+
+	// ruch w stronê gracza w osi x
+	if (fabs(distX) > ATTACK_RANGE - 15) {
+		if (distX > 0) enemy->x += ENEMY_SPEED_WALK * delta;
+		else enemy->x -= ENEMY_SPEED_WALK * delta;
+		enemy->currentAction = ACTION_WALK;
 	}
-	else if (enemy->currentAction == ACTION_LIGHT) {
+
+	// ruch w stronê gracza w osi y
+	if (fabs(distY) > 10) {
+		if (distY > 0) enemy->y += (ENEMY_SPEED_WALK * 0.6) * delta;
+		else enemy->y -= (ENEMY_SPEED_WALK * 0.6) * delta;
+		enemy->currentAction = ACTION_WALK;
+	}
+}
+
+void performAttack(Enemy* enemy) {
+	enemy->currentAction = ACTION_LIGHT;
+	enemy->actionTimer = TIME_ATTACK_LIGHT;
+	enemy->hasHit = false;
+	enemy->attackCooldown = 2.0;
+}
+
+bool canAttackSimple(Enemy* enemy, Player* player) {
+	double distX = player->x - enemy->x;
+	double distY = player->y - enemy->y;
+
+	if (enemy->attackCooldown > 0) return false;
+
+	if (fabs(distX) < ATTACK_RANGE && fabs(distY) < ATTACK_RANGE / 2) {
+		return true;
+	}
+	return false;
+}
+
+void updateSimpleEnemyBehavior(Enemy* enemy, Player* player, double delta) {
+	if (enemy->currentAction == ACTION_LIGHT) {
 		enemy->actionTimer -= delta;
+
 		if (enemy->actionTimer <= 0) {
 			enemy->currentAction = ACTION_IDLE;
 			enemy->actionTimer = 0;
 		}
+		return;
+	}
+
+	// wybiera czy podejœæ czy zaatakowaæ
+	if (canAttackSimple(enemy, player)) {
+		performAttack(enemy);
+	}
+	else {
+		moveEnemySimple(enemy, player, delta);
+	}
+}
+
+// funkcja logiki zachowania przeciwników
+void updateEnemies(GameState* state, double delta) {
+	Player* player = &state->player;
+	for (int i = 0; i < MAX_ENEMIES; i++) {
+		Enemy* enemy = &state->enemies[i];
+		// sprawdzanie czy istnieje
+		if (!enemy->active) continue;
+
+		// obs³uga stuna
+		if (enemy->hitTimer > 0) {
+			enemy->hitTimer -= delta;
+			continue;
+		}
+
+		// obs³uga cooldownu
+		if (enemy->attackCooldown > 0) {
+			enemy->attackCooldown -= delta;
+		}
+
+		switch (enemy->type) {
+		case ENEMY_TYPE_SIMPLE:
+			updateSimpleEnemyBehavior(enemy, player, delta);
+			break;
+
+		case ENEMY_TYPE_CHARGER:
+			// updateChargerEnemyBehavior(enemy, player, delta); // To zrobimy w nastêpnym kroku
+			break;
+		}
+
+		updateEnemyAnimation(enemy, delta);
 	}
 }
 
@@ -1257,7 +1456,7 @@ void handleEvents(GameState* state, const SDLContext* sdl) {
 // aktualizacja stanu gry
 void updateGame(GameState* state, SDLContext* sdl) {
 	updateTime(&state->time);
-	updateEnemy(&state->enemy, state->time.delta);
+	updateEnemies(state, state->time.delta);
 	updatePlayerAction(state);
 	movePlayer(&state->player, state->time.delta, sdl->bgWidth);
 	updatePlayerAnimation(&state->player, state->time.delta);
@@ -1272,9 +1471,7 @@ void render(GameState* state, SDLContext* sdl) {
 	SDL_FillRect(sdl->screen, NULL, SDL_MapRGBA(sdl->screen->format, 0, 0, 0, 0));
 
 	drawScene(sdl->renderer, sdl->background, &state->camera);
-
-	drawEnemy(sdl->renderer, &state->enemy, &state->camera);
-
+	drawEnemies(sdl->renderer, state);
 	drawPlayer(sdl->renderer, &state->player, &state->camera);
 
 	drawHitboxes(sdl, state);
